@@ -4,9 +4,8 @@ import numpy as np
 import shutil,os
 
 
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, confusion_matrix
 from sklearn.model_selection import train_test_split
-
 
 
 def read_train_make_split(file_name,dev_split):
@@ -20,9 +19,10 @@ def read_train_make_split(file_name,dev_split):
 
     return X_train, X_dev, y_train,y_dev
 
-def build_optimiser_cost(logits,sigmoids,num_labels):
+def build_optimiser_cost(logits,sigmoids,num_labels):  #,fc1_weights,fc2_weights,wt):
 
     pos_wt = 1 # increase to give more weight to the positive class
+    lambd = 0.01
 
     with tf.name_scope('cross_entropy'):
 
@@ -32,7 +32,7 @@ def build_optimiser_cost(logits,sigmoids,num_labels):
 
         # Binary cross-entropy loss
         weighted_cross_entropy_mean = tf.nn.weighted_cross_entropy_with_logits(targets=ground_truth_input, logits=logits,pos_weight=pos_wt,name="loss_binary_xe")
-        loss = tf.reduce_mean(weighted_cross_entropy_mean ,name="cross_entropy_loss")
+        loss = tf.reduce_mean(weighted_cross_entropy_mean ,name="cross_entropy_loss")  # + lambd * tf.nn.l2_loss(fc1_weights) + lambd * tf.nn.l2_loss(fc2_weights) + lambd * tf.nn.l2_loss(wt)
 
         #train_step = tf.train.AdadeltaOptimizer(learning_rate=learning_rate_input).minimize(loss)
         train_step = tf.train.AdamOptimizer(learning_rate=learning_rate_input).minimize(loss)
@@ -70,27 +70,29 @@ def build_graph(fc1_units, fc2_units,fc3_units):
 
 
         fc1 = tf.layers.dense(inputs,fc1_units,activation=tf.nn.relu,name="layer_fc1",kernel_initializer=xavier_init_fc_1)
+        fc1_weights = tf.get_default_graph().get_tensor_by_name(os.path.split(fc1.name)[0] + '/kernel:0')
         fc1_drop = tf.nn.dropout(fc1,dropout_1)
 
-        fc2 = tf.layers.dense(fc1_drop, fc2_units, activation=tf.nn.relu, name="layer_fc2",kernel_initializer=xavier_init_fc_2)
-        fc2_drop = tf.nn.dropout(fc2, dropout_2)
+        #fc2 = tf.layers.dense(fc1, fc2_units, activation=tf.nn.relu, name="layer_fc2",kernel_initializer=xavier_init_fc_2)
+        #fc2_weights = tf.get_default_graph().get_tensor_by_name(os.path.split(fc2.name)[0] + '/kernel:0')
+        #fc2_drop = tf.nn.dropout(fc2_drop, dropout_2)
 
         #fc3 = tf.layers.dense(fc2_drop, fc3_units, activation=tf.nn.relu, name="layer_fc3",kernel_initializer=xavier_init_fc_3)
-        #fc3_drop = tf.nn.dropout(fc3, dropout_3)
+        #fc3_drop = tf.nn.dropout(fc3_drop, dropout_3)
 
     with (tf.variable_scope("sigmoid_layer")):
 
         xavier_init_fc_4 = tf.contrib.layers.xavier_initializer()
-        wt = tf.get_variable(name="lreg_wt",shape=[fc2_units,1],initializer=xavier_init_fc_4)
+        wt = tf.get_variable(name="lreg_wt",shape=[fc1_units,1],initializer=xavier_init_fc_4)
         bias = tf.get_variable(name="lreg_bias",shape=[1],initializer=tf.zeros_initializer())
 
-        logits = tf.add(tf.matmul(fc2_drop,wt),bias)
+        logits = tf.add(tf.matmul(fc1_drop,wt),bias)
         logits_sq = tf.squeeze(logits,axis=1,name="logits") # to match the ground truth labels shape
 
         sig = tf.nn.sigmoid(logits_sq)
 
 
-    return inputs, logits_sq, sig, dropout_1,dropout_2,dropout_3
+    return inputs, logits_sq, sig, dropout_1,dropout_2,dropout_3 #,  fc1_weights,fc2_weights,wt
 
 
 
@@ -109,7 +111,7 @@ def get_mini_batch(X_train_0,X_train_1,mini_batch_size):
     return mini_batch
 
 
-def train_model(X_train,X_dev,y_train,y_dev):
+def train_model(X_train,X_dev,y_train,y_dev, chkpoint_dir):
 
     fc1_units = 512
     fc2_units = 512
@@ -122,7 +124,7 @@ def train_model(X_train,X_dev,y_train,y_dev):
     num_epochs = 20000
     num_labels = 2
 
-    learning_rate = 0.001
+    learning_rate = 0.0001
 
     mini_batch_size = 512
 
@@ -139,13 +141,15 @@ def train_model(X_train,X_dev,y_train,y_dev):
     train_tensorboard_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/train_tensorboard/'
     valid_tensorboard_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/valid_tensorboard/'
 
-    chkpoint_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/chkpoint_dir/'
+
 
     with tf.Graph().as_default() as gr:
 
         inputs, logits, sig , dropout_1,dropout_2,dropout_3 = build_graph(fc1_units,fc2_units,fc3_units)
+        #, fc1_weights,fc2_weights,wt \
+
         ground_truth_input, learning_rate_input, train_step, confusion_matrix, weighted_cross_entropy_mean, loss, predictions = \
-        build_optimiser_cost(logits,sig,num_labels)
+        build_optimiser_cost(logits,sig,num_labels) #,fc1_weights,fc2_weights,wt)
 
     with tf.Session(graph=gr) as sess:
 
@@ -257,15 +261,182 @@ def train_model(X_train,X_dev,y_train,y_dev):
                 valid_writer.add_summary(loss_valid_summary, i / val_batch)
 
 
+def sigmoid(x):
+    return 1/(1 + np.exp(-x))
+
+
+
+def test_inference(X_test,threshold,chkpoint_dir,chkpoint_file,write_file):
+
+
+    X_fullvisitorid = X_test.loc[:,'fullVisitorId']
+    #print (X_fullvisitorid)
+
+    X_fullvisitorid_npy = X_fullvisitorid.as_matrix()
+
+    print ('Original Shape:' + str(X_test.shape))
+
+    X_test.drop('Unnamed: 0', axis=1, inplace=True)
+    X_test.drop('fullVisitorId', axis=1, inplace = True)
+    X_test.drop('is_revenue', axis=1,inplace = True)
+
+    print ('Dropped columns')
+
+    #nans_index = np.isnan(X_test)
+    #X_test[nans_index] = 0
+
+    print (X_test.shape)
+
+
+    X_test_logits = inference_logits(X_test,chkpoint_dir,chkpoint_file)
+
+    X_test_sigmoid = sigmoid(X_test_logits)
+    X_test_pred = int((X_test_sigmoid > threshold))
+
+    X_test_final = np.vstack((X_fullvisitorid_npy,X_test_pred)).T
+    X_test_final_df = pd.DataFrame(X_test_final)
+
+    X_test_final_df.to_csv(write_file)
+
+
+
+def pick_threshold(X_train_full, y_train_full,chkpoint_dir,chkpoint_file):
+
+    """
+    :param X_train_full: Full X_matrix of training data. Includes the label column.
+    :param y_train_full: Full y_matrix of training labels.
+    :param chkpoint_dir: Directory where checkpoints are stored
+    :param chkpoint_file: the model checkpoint file
+    :return: The threshold that gives the best youden's J statistic, for the entire train set.
+    """
+
+    # Picks a threshold using the best Youden's J statistic for the threshold
+    # At this point, the best model has already been picked by AUC
+    X_train_full.drop('is_revenue', axis=1, inplace=True)
+
+    X_logits_np = inference_logits(X_train_full,chkpoint_dir,chkpoint_file)
+
+    x_sigmoid = sigmoid(X_logits_np)
+    y_full_npy = y_train_full.as_matrix()
+
+    # Loop through the thresholds to get the best Youden's J
+    youden_j_dict = {}
+    threshold = 0
+
+    while (threshold <= 1):
+        y_hat = (x_sigmoid > threshold)
+        conf_matrix = confusion_matrix(y_full_npy,y_hat)
+
+        print ('Threshold:' + str(threshold))
+        print (conf_matrix)
+
+        sensitivity = conf_matrix[1,1] / (conf_matrix[1,1] + conf_matrix[1,0])
+        specificity = conf_matrix[0,0] / (conf_matrix[0,0] + conf_matrix[0,1])
+        youden_j = sensitivity + specificity - 1
+
+        youden_j_dict[str(threshold)] = youden_j
+
+        threshold += 0.05
+
+    return float(max(youden_j_dict,key=youden_j_dict.get))
+
+
+
+def inference_logits(X_mat, chkpoint_dir, chkpoint_file):
+
+    """
+    :param X_mat: Matrix to make predictions for. Must not include the is_revenue column
+    :param chkpoint_dir: directory with checkpoint files
+    :param chkpoint_file: the checkpoint file to use
+    :return: a numpy array with the logits for the X_mat
+    """
+
+    fc1_units = 512
+    fc2_units = 512
+    fc3_units = 512
+
+    #X_mat.drop('is_revenue', axis=1, inplace=True)
+
+    chkpoint_model_file = chkpoint_dir + chkpoint_file
+    num_labels = 2
+
+    n_rows = X_mat.shape[0]
+    batch_size = 1024
+
+    i_lower = 0
+
+    logits_full = []
+
+    with tf.Graph().as_default() as gr:
+        inputs, logits, _, dropout_1, dropout_2, dropout_3  = build_graph(fc1_units, fc2_units, fc3_units) #, _, _, _ \
+
+
+    with tf.Session(graph=gr) as sess:
+
+        saver = tf.train.Saver()
+        saver.restore(sess, chkpoint_model_file)
+
+        if (i_lower + batch_size > n_rows):
+            batch_size = n_rows - i_lower
+        else:
+            batch_size = 1024
+
+        # Inference on all rows
+        while (i_lower < n_rows):
+
+            # Subset the data
+            X_subset = X_mat[i_lower:i_lower + batch_size]
+
+            # Fill in NA
+            X_subset_npy = X_subset.as_matrix()
+            nans_index = np.isnan(X_subset_npy)
+            X_subset_npy[nans_index] = 0
+
+            predictions = sess.run(logits,
+                                   feed_dict={
+                                       inputs : X_subset_npy,
+                                       dropout_1 : 1.0,
+                                       dropout_2 : 1.0,
+                                       dropout_3 : 1.0
+                                   })
+
+            logits_full.extend(predictions.tolist())
+            i_lower = i_lower + batch_size
+
+
+        logits_np = np.asarray(logits_full)
+
+        return logits_np
+
 
 def main():
 
     file_name = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/train_mod1_v2.csv'
+    test_file_name = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/dfgoog-test_mod1_v2.csv'
+
+    chkpoint_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/chkpoint_dir_v2/'
+    chkpoint_file = 'google_analytics_revenue_model.ckpt-20000'
+
+    inference_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/test_mod1_inf.csv'
+
     dev_split = 0.10
     X_train,X_dev,y_train,y_dev = read_train_make_split(file_name,dev_split)
 
+    # Trains the model using AUC
+    #train_model(X_train,X_dev,y_train,y_dev,chkpoint_dir)
+    X_full = X_train.append(X_dev,ignore_index = True)
+    y_full = y_train.append(y_dev)
 
-    train_model(X_train,X_dev,y_train,y_dev)
+    #inference(X_full,chkpoint_dir,chkpoint_file)
+    #thres = pick_threshold(X_full,y_full,chkpoint_dir,chkpoint_file)
+    thres = 0.6
+    X_test = pd.read_csv(test_file_name, low_memory=False)
+
+
+    print ('Selected threshold is:' + str(thres))
+
+    test_inference(X_test,thres,chkpoint_dir,chkpoint_file,inference_file)
+
 
 
 
