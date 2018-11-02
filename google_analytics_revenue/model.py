@@ -7,13 +7,22 @@ import shutil,os
 from sklearn.metrics import roc_auc_score, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
+from imblearn.over_sampling import SMOTE
 
 
-def read_train_make_split(X_npy,dev_split):
+def read_train_make_split(X,dev_split, is_pca_process = False):
 
-    # Assumes last column
-    y = X_npy[:,X_npy.shape[1] - 1]
-    X_train, X_dev, y_train,y_dev = train_test_split(X_npy,y,test_size=dev_split,stratify=y)
+    if (is_pca_process):
+        # Assumes last column
+        y = X[:,X.shape[1] - 1]
+        X_train, X_dev, y_train,y_dev = train_test_split(X,y,test_size=dev_split,stratify=y)
+
+    else:
+        y = X.loc[:,'is_revenue']
+        X.drop('is_revenue', axis=1, inplace=True)
+        X_train, X_dev, y_train, y_dev = train_test_split(X, y, test_size=dev_split, stratify=y)
+
+
 
     return X_train, X_dev, y_train,y_dev
 
@@ -55,7 +64,7 @@ def build_graph(fc1_units, fc2_units,fc3_units):
 
     with (tf.variable_scope("input_layer")):
 
-        inputs = tf.placeholder(shape=[None,64],name="input_train",dtype=tf.float32)
+        inputs = tf.placeholder(shape=[None,257],name="input_train",dtype=tf.float32)
         dropout_1 = tf.placeholder(name="dropout_1",dtype=tf.float32)
         dropout_2 = tf.placeholder( name="dropout_2", dtype=tf.float32)
         dropout_3 = tf.placeholder( name="dropout_3", dtype=tf.float32)
@@ -106,8 +115,8 @@ def get_mini_batch(X_train_0,X_train_1,mini_batch_size, train_indx_0, train_indx
     #sample_0 = X_train_0.sample(n = int(round(mini_batch_size * 0.99987259)))
     #sample_1 = X_train_1.sample(n= int(round(mini_batch_size * 0.012741)))
 
-    sample_train_indexes_0 = np.random.choice(train_indx_0,mini_batch_size * 1,replace=False)
-    sample_train_indexes_1 = np.random.choice(train_indx_1, mini_batch_size * 1, replace=False)
+    sample_train_indexes_0 = np.random.choice(train_indx_0,int(round(mini_batch_size * 0.99987259)),replace=False)
+    sample_train_indexes_1 = np.random.choice(train_indx_1, int(round(mini_batch_size * 0.012741)), replace=False)
 
     #sample_0 = X_train_0.sample(n = int(round((mini_batch_size * 1))))
     #sample_1 = X_train_1.sample(n = int(round(mini_batch_size)))
@@ -117,28 +126,182 @@ def get_mini_batch(X_train_0,X_train_1,mini_batch_size, train_indx_0, train_indx
 
     mini_batch = np.vstack((sample_0,sample_1))
     np.random.shuffle(mini_batch)
-    #mini_batch_sample = pd.concat([sample_0,sample_1],ignore_index=True)
+
+    ##mini_batch_sample = pd.concat([sample_0,sample_1],ignore_index=True)
     #mini_batch = mini_batch_sample.sample(frac=1).reset_index(drop=True) # reshuffles
 
     return mini_batch
 
 
-def train_model(X_train,X_dev,y_train,y_dev, chkpoint_dir):
 
-    fc1_units = 256
-    fc2_units = 64
-    fc3_units = 64
+def train_model_full_batch(X_train, X_dev, y_train, y_dev, chkpoint_dir):
+
+    fc1_units = 512
+    fc2_units = 512
+    fc3_units = 512
 
     drop_1 = 1.0
-    drop_2 = 0.6
-    drop_3 = 0.6
+    drop_2 = 1.0
+    drop_3 = 1.0
 
     num_epochs = 200000
     num_labels = 2
 
     learning_rate = 0.0001
 
-    mini_batch_size = 512
+    mini_batch_size = 1024
+    i = 0
+    val_batch = 1
+
+
+    n_rows = X_train.shape[0]
+
+    train_tensorboard_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/train_tensorboard/'
+    valid_tensorboard_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/valid_tensorboard/'
+
+    with tf.Graph().as_default() as gr:
+        inputs, logits, sig, dropout_1, dropout_2, dropout_3, fc1_weights, fc2_weights, fc3_weights, wt = build_graph(
+            fc1_units, fc2_units, fc3_units)
+
+        ground_truth_input, learning_rate_input, train_step, weighted_cross_entropy_mean, loss, confusion_matrix = \
+            build_optimiser_cost(logits, sig, num_labels, fc1_weights, fc2_weights, fc3_weights, wt)
+
+    with tf.Session(graph=gr) as sess:
+        saver = tf.train.Saver()
+        sess.run(tf.global_variables_initializer())
+        sess.run(tf.local_variables_initializer())
+
+        # Tensorboard init
+        if (os.path.exists(train_tensorboard_dir)):
+            shutil.rmtree(train_tensorboard_dir)
+        os.mkdir(train_tensorboard_dir)
+        if (os.path.exists(valid_tensorboard_dir)):
+            shutil.rmtree(valid_tensorboard_dir)
+        os.mkdir(valid_tensorboard_dir)
+        if (os.path.exists(chkpoint_dir)):
+            shutil.rmtree(chkpoint_dir)
+
+        os.mkdir(chkpoint_dir)
+
+        train_writer = tf.summary.FileWriter(train_tensorboard_dir, sess.graph)
+        valid_writer = tf.summary.FileWriter(valid_tensorboard_dir)
+
+        xent_counter = 0
+
+        X_dev_npy = X_dev.as_matrix()
+        nans_index = np.isnan(X_dev_npy)
+        X_dev_npy[nans_index] = 0
+
+        y_dev_npy = y_dev.as_matrix()
+
+        print('Sum is:' + str(y_dev_npy.sum()))
+        print (n_rows)
+
+        np.random.shuffle(X_train)
+
+        for j in range(1,num_epochs):
+
+            while (i <= n_rows):
+
+                if (i + mini_batch_size >= n_rows):
+                    mini_batch = X_train[i: n_rows - 1]
+                else:
+                    mini_batch = X_train[i: i + mini_batch_size]
+
+                print ('Mini Batch shape:' + str(mini_batch.shape))
+
+                mini_batch_y = mini_batch[:, mini_batch.shape[1] - 1]
+                mini_batch = mini_batch[:, :-1]
+
+                print(mini_batch_y.sum())
+
+                # mini_batch_npy = mini_batch.as_matrix()
+                # mini_batch_npy_y = mini_batch_y.as_matrix()
+                # nans_index = np.isnan(mini_batch_npy)
+                # mini_batch_npy[nans_index] = 0
+
+                print('Mini-batch retrieved.')
+                # Put inputs through the graph
+                _, l, total_conf_matrix, wt_mean = sess.run(
+                    [
+                        train_step, loss, confusion_matrix, weighted_cross_entropy_mean
+
+                    ],
+                        feed_dict={
+                        inputs: mini_batch,
+                        ground_truth_input: mini_batch_y,
+                        learning_rate_input: learning_rate,
+                        dropout_1: drop_1,
+                        dropout_2: drop_2,
+                        dropout_3: drop_3
+
+                    })
+
+                # Write loss to tensorflow for each batch
+                xent_train_summary = tf.Summary(
+                    value=[tf.Summary.Value(tag="cross_entropy_avg", simple_value=l)])
+                xent_counter += 1
+                train_writer.add_summary(xent_train_summary, xent_counter)
+
+                print('The training loss after batch ' + str(i) + ' is:' + str(l))
+
+                print('Training Confusion Matrix: ' + '\n' + str(total_conf_matrix))
+                true_pos = np.sum(np.diag(total_conf_matrix))
+                all_pos = np.sum(total_conf_matrix)
+                print('Training data points:' + str(all_pos))
+
+                if (i % 10 == 0):
+                    print('Saving checkpoint for epoch:' + str(i))
+                    saver.save(sess=sess, save_path=chkpoint_dir + 'google_analytics_revenue_model.ckpt',
+                               global_step=i)
+
+                if (i % val_batch == 0):  # dev metrics after 10 epochs
+
+                    sg, val_l, valid_conf_matrix = sess.run(
+                        [sig, loss, confusion_matrix],
+                        feed_dict={
+                            inputs: X_dev,
+                            ground_truth_input: y_dev,
+                            dropout_1: 1.0,
+                            dropout_2: 1.0,
+                            dropout_3: 1.0
+                        })
+
+                    auc = roc_auc_score(y_dev, sg, average="weighted")
+
+                    print('Validation Confusion Matrix: ' + '\n' + str(valid_conf_matrix))
+                    true_pos = np.sum(np.diag(valid_conf_matrix))
+                    all_pos = np.sum(valid_conf_matrix)
+                    print('Validation data points:' + str(all_pos))
+
+                    print('Validation AUC on batch ' + str(i / val_batch) + ' is:' + str(auc))
+                    print('Validation loss ' + str(i / val_batch) + ' is:' + str(val_l))
+
+                    auc_valid_summary = tf.Summary(value=[tf.Summary.Value(tag="auc_valid_summary", simple_value=auc)])
+                    valid_writer.add_summary(auc_valid_summary, i / val_batch)
+
+                    loss_valid_summary = tf.Summary(value=[tf.Summary.Value(tag="loss_valid_summary", simple_value=val_l)])
+                    valid_writer.add_summary(loss_valid_summary, i / val_batch)
+
+                i += mini_batch_size
+
+
+def train_model(X_train,X_dev,y_train,y_dev, chkpoint_dir):
+
+    fc1_units = 512
+    fc2_units = 512
+    fc3_units = 512
+
+    drop_1 = 1.0
+    drop_2 = 1.0
+    drop_3 = 1.0
+
+    num_epochs = 200000
+    num_labels = 2
+
+    learning_rate = 0.001
+
+    mini_batch_size = 4096
 
 
     train_tensorboard_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/train_tensorboard/'
@@ -191,26 +354,29 @@ def train_model(X_train,X_dev,y_train,y_dev, chkpoint_dir):
         val_batch = 1
 
         #X_dev.drop('is_revenue', axis=1, inplace=True)
-        X_dev = X_dev[:,:-1]
+        #X_dev = X_dev[:,:-1]
         print (X_dev.shape)
 
-        #X_dev_npy = X_dev.as_matrix()
-        #nans_index = np.isnan(X_dev_npy)
-        #X_dev_npy[nans_index] = 0
+        X_dev_npy = X_dev.as_matrix()
+        nans_index = np.isnan(X_dev_npy)
+        X_dev_npy[nans_index] = 0
 
-        #y_dev_npy = y_dev.as_matrix()
+        y_dev_npy = y_dev.as_matrix()
 
-        print('Sum is:' + str(y_dev.sum()))
+        print('Sum is:' + str(y_dev_npy.sum()))
+
 
         for i in range(1,num_epochs + 1):
 
-            #if (i >= 800 and learning_rate != 0.0001):
-            #    learning_rate = 0.0001
+            if (i >= 800 and learning_rate != 0.0001):
+                learning_rate = 0.0001
 
             # Get mini batch for the epoch
             mini_batch = get_mini_batch(X_train_0=X_train_0, X_train_1=X_train_1, mini_batch_size=mini_batch_size,train_indx_0=train_idxs_0,train_indx_1=train_idxs_1)
             mini_batch_y = mini_batch[:,mini_batch.shape[1] - 1]
+            #mini_batch_y = mini_batch.loc[:,'is_revenue']
             mini_batch = mini_batch[:,:-1]
+            #mini_batch.drop('is_revenue',axis= 1, inplace=True)
             print (mini_batch_y.sum())
             print (mini_batch_y.shape)
 
@@ -461,7 +627,8 @@ def main():
     inference_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/test_mod1_inf.csv'
     pca_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/pca_train.csv'
 
-    dev_split = 0.1
+    dev_split = 0.05
+    smote_ratio = 0.6
 
 
     # Read train file, drop columns, do some PCA
@@ -469,8 +636,8 @@ def main():
     data_frame.drop('Unnamed: 0', axis=1, inplace=True)
 
     # This will return a numpy array with label as the last column
-    X_pca = perform_pca(data_frame)
-    print (X_pca.shape)
+    #X_pca = perform_pca(data_frame)
+    #print (X_pca.shape)
     #mat = np.matrix(X_pca)
 
     #with open(pca_file,'w') as f:
@@ -479,12 +646,30 @@ def main():
     #        np.savetxt(f, line)
 
     # do train - dev split on numpy array
-    X_train,X_dev,y_train,y_dev = read_train_make_split(X_pca,dev_split)
+    X_train,X_dev,y_train,y_dev = read_train_make_split(data_frame,dev_split)
+
+    # SMOTE
+
+    print ('Sum of is_revenue before smote:')
+    print (y_train.sum())
+    print (X_train.shape)
+
+    sm = SMOTE(random_state = 666,ratio= smote_ratio)
+    X_smote, y_smote = sm.fit_sample(X_train, y_train)
+
+    print('Sum of is_revenue aftersmote:')
+    print(y_smote.sum())
+    print(X_smote.shape)
     #X_test = pd.read_csv(test_file_name, low_memory=False)
 
 
+    X_smote_2 = np.c_[X_smote,y_smote]
+
     # Trains the model using AUC
-    train_model(X_train,X_dev,y_train,y_dev,chkpoint_dir)
+    train_model(X_smote_2,X_dev,y_smote,y_dev,chkpoint_dir)
+    #train_model_full_batch(X_smote_2,X_dev,y_smote,y_dev,chkpoint_dir)
+
+
     X_full = X_train.append(X_dev,ignore_index = True)
     y_full = y_train.append(y_dev)
     thres = pick_threshold(X_full,y_full,chkpoint_dir,chkpoint_file)
