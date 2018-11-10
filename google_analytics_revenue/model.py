@@ -65,7 +65,7 @@ def build_graph(fc1_units, fc2_units,fc3_units, fc4_units):
 
     with (tf.variable_scope("input_layer")):
 
-        inputs = tf.placeholder(shape=[None,256],name="input_train",dtype=tf.float32)
+        inputs = tf.placeholder(shape=[None,264],name="input_train",dtype=tf.float32)
 
         dropout_1 = tf.placeholder(name="dropout_1",dtype=tf.float32)
         dropout_2 = tf.placeholder( name="dropout_2", dtype=tf.float32)
@@ -129,8 +129,8 @@ def get_mini_batch(X_train_0,X_train_1,mini_batch_size, train_indx_0, train_indx
     #sample_0 = X_train_0.sample(n = int(round(mini_batch_size * 0.99987259)))
     #sample_1 = X_train_1.sample(n= int(round(mini_batch_size * 0.012741)))
 
-    sample_train_indexes_0 = np.random.choice(train_indx_0,int(round(mini_batch_size * 1.0)),replace=False)
-    sample_train_indexes_1 = np.random.choice(train_indx_1, int(round(mini_batch_size * 1.0)), replace=False)
+    sample_train_indexes_0 = np.random.choice(train_indx_0,int(round(mini_batch_size * 0.99987259)),replace=False)
+    sample_train_indexes_1 = np.random.choice(train_indx_1, int(round(mini_batch_size * 0.012741)), replace=False)
 
     #sample_0 = X_train_0.sample(n = int(round((mini_batch_size * 1))))
     #sample_1 = X_train_1.sample(n = int(round(mini_batch_size * 1)))
@@ -150,14 +150,14 @@ def get_mini_batch(X_train_0,X_train_1,mini_batch_size, train_indx_0, train_indx
 
 def train_model(X_train,X_dev,y_train,y_dev, chkpoint_dir):
 
-    fc1_units = 256
-    fc2_units = 256
+    fc1_units = 512
+    fc2_units = 512
     fc3_units = 256
     fc4_units = 256
 
     drop_1 = 1.0
     drop_2 = 1.0
-    drop_3 = 0.5
+    drop_3 = 1.0
     drop_4 = 0.5
 
     num_epochs = 2000000
@@ -317,8 +317,8 @@ def train_model(X_train,X_dev,y_train,y_dev, chkpoint_dir):
                 loss_valid_summary = tf.Summary(value=[tf.Summary.Value(tag="loss_valid_summary", simple_value=val_l)])
                 valid_writer.add_summary(loss_valid_summary, i / val_batch)
 
-                if (auc > 98.0):
-                    break
+                #if (auc > 98.0):
+                #    break
 
 
 def sigmoid(x):
@@ -362,7 +362,7 @@ def pick_threshold(X_train_full, y_train_full,chkpoint_dir,chkpoint_file):
 
     # Picks a threshold using the best Youden's J statistic for the threshold
     # At this point, the best model has already been picked by AUC
-    X_train_full.drop('is_revenue', axis=1, inplace=True)
+    #X_train_full.drop('is_revenue', axis=1, inplace=True)
 
     X_logits_np = inference_logits(X_train_full,chkpoint_dir,chkpoint_file)
 
@@ -389,7 +389,7 @@ def pick_threshold(X_train_full, y_train_full,chkpoint_dir,chkpoint_file):
 
         threshold += 0.05
 
-    return float(max(youden_j_dict,key=youden_j_dict.get))
+    return float(max(youden_j_dict,key=youden_j_dict.get)), x_sigmoid
 
 
 
@@ -459,96 +459,83 @@ def inference_logits(X_mat, chkpoint_dir, chkpoint_file):
         return logits_np
 
 
-def main():
+def training():
 
-    file_name = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/dfgoog_mod1_v2.csv'
-    test_file_name = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/dfgoog_test_mod1_v2.csv'
+    file_name = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/dfgoog_mod1_v2_v2.csv'
 
     chkpoint_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/chkpoint_dir/'
-    chkpoint_file = 'google_analytics_revenue_model.ckpt-2910'
-    X_dev_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/X_dev.csv'
-    y_dev_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/y_dev.csv'
-
-    inference_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/test_mod1_inf.csv'
-    pca_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/pca_train.csv'
+    chkpoint_file = 'google_analytics_revenue_model.ckpt-19240'
 
     dev_split = 0.01
-    smote_ratio = 0.3
-
+    smote_ratio = 0.1
 
     # Read train file, drop columns, do some PCA
     data_frame = pd.read_csv(file_name, low_memory=False)
     data_frame.drop('Unnamed: 0', axis=1, inplace=True)
-    data_frame.drop('totals_bounces', axis=1, inplace=True)
-
-    # This will return a numpy array with label as the last column
-    #X_pca = perform_pca(data_frame)
-    #print (X_pca.shape)
-    #mat = np.matrix(X_pca)
-
-    #with open(pca_file,'w') as f:
-    #    for line in mat:
-    #        #print (line)
-    #        np.savetxt(f, line)
+    data_frame.drop('isotherkeyword', axis=1, inplace=True)
 
     # do train - dev split on numpy array
     X_train,X_dev,y_train,y_dev = read_train_make_split(data_frame,dev_split,is_pca_process=False)
-
-    X_dev.to_csv(X_dev_file)
-    y_dev.to_csv(y_dev_file)
-
-    # SMOTE
-    print ('Sum of is_revenue before smote:')
-    print (y_train.sum())
-    print (X_train.shape)
 
     #X_train = X_train[:,:-1]
     X_train.drop('is_revenue', axis=1, inplace=True)
 
     sm = SMOTE(random_state = 666,ratio= smote_ratio,k_neighbors=2)
-    #sm = ADASYN(random_state = 666,ratio= None,n_neighbors=5)
     X_smote, y_smote = sm.fit_sample(X_train, y_train)
-
-    print('Sum of is_revenue aftersmote:')
-    print(y_smote.sum())
-    print(X_smote.shape)
-    #X_test = pd.read_csv(test_file_name, low_memory=False)
 
     X_smote_2 = np.c_[X_smote,y_smote]
 
     # Trains the model using AUC
     train_model(X_smote_2,X_dev,y_smote,y_dev,chkpoint_dir)
-    #train_model_full_batch(X_smote_2,X_dev,y_smote,y_dev,chkpoint_dir)
 
 
 
-    #X_full = X_train.append(X_dev,ignore_index = True)
-    #y_full = y_train.append(y_dev)
-    #thres = pick_threshold(X_full,y_full,chkpoint_dir,chkpoint_file)
-    thres = 0.5
-
-    print('Selected threshold is:' + str(thres))
-
-    test_inference(X_dev,)
-    test_inference(X_dev,thres,chkpoint_dir,chkpoint_file,inference_file)
 
 
-def dev_inference():
-    X_dev_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/X_dev.csv'
-    #y_dev_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/y_dev.csv'
 
+def inference():
+
+    X_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/dfgoog_test_mod1_v2.csv'
+    X_train = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/dfgoog_mod1_v2_v2.csv'
+
+    #chkpoint_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/chkpoint_dir_new_features_tanh_2/'
     chkpoint_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/chkpoint_dir/'
-    chkpoint_file = 'google_analytics_revenue_model.ckpt-2910'
+    #chkpoint_file = 'google_analytics_revenue_model.ckpt-137930'
+    chkpoint_file = 'google_analytics_revenue_model.ckpt-19240'
+
+    out_dir = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/out_2.csv'
 
     inference_file = '/home/nitin/Desktop/google_analytics/google_analytics_revenue/test_mod1_inf.csv'
 
-    X_dev = pd.read_csv(X_dev_file)
-    X_dev.drop('Unnamed: 0', axis=1, inplace=True)
-    X_dev.drop('is_revenue', axis=1, inplace=True)
-
-    test_inference(X_dev,0.5,chkpoint_dir,chkpoint_file,inference_file)
+    X_train_df = pd.read_csv(X_train)
+    X_train_df.drop('Unnamed: 0', axis=1, inplace=True)
+    X_train_df.drop('isotherkeyword', axis=1, inplace=True)
 
 
+    X_df = pd.read_csv(X_file)
+    X_df.drop('Unnamed: 0', axis=1, inplace=True)
+    X_df.drop('is_revenue', axis=1, inplace=True)
+    y = X_train_df.loc[:,'is_revenue']
+    X_train_df.drop('is_revenue', axis=1, inplace=True)
 
-main()
-#dev_inference()
+
+
+    thres, x_sigmoid = pick_threshold(X_train_df, y, chkpoint_dir, chkpoint_file)
+    #thres = 0.5
+
+    y_hat = (x_sigmoid > thres)
+    #X_train_df['is_revenue_hat'] = y_hat
+
+    np.savetxt(out_dir,y_hat)
+
+    print('Selected threshold is:' + str(thres))
+
+
+
+    #test_inference(X_df,thres,chkpoint_dir,chkpoint_file,inference_file)
+
+
+
+#main()
+#inference()
+training()
