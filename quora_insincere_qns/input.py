@@ -19,18 +19,28 @@ glove_dict = {}
 
 def load_glove_vectors(file):
 
+    wts = []
     temp_cache = '/home/nitin/Desktop/kaggle_data/all/temp.csv'
 
     with open(temp_cache,'w') as tmp:
         with open (file,'r') as f:
             for index, line in enumerate(f):
                 l = line.split(' ')
-                tmp.write(str(index) + ',' + str(l[0] + '\n'))
+                #tmp.write(str(index) + ',' + str(l[0] + '\n'))
 
                 #add to the global dictionary
-                glove_dict[str(l[0]).strip().lower()] = index
+                #glove_dict[str(l[0]).strip().lower()] = index
+                del l[0]
+                #print ('appending:' + str(index))#
+                wts.append(l)
 
-    return glove_dict
+
+    # contains the word embeddings. assumes indexes start from 0-based in the txt file
+    print ('To nupy')
+
+    weights = np.asarray(wts)
+
+    return glove_dict, weights
 
 
 def read_train_test_words(train_file,test_file, glove_file):
@@ -39,32 +49,37 @@ def read_train_test_words(train_file,test_file, glove_file):
 
     qn_idxs = []
 
-    glove_dict = load_glove_vectors(glove_file)
+    glove_dict, _ = load_glove_vectors(glove_file)
     train_df = pd.read_csv(train_file, low_memory=False)
-    test_df = pd.read_csv(test_file, low_memory=False)
+    #test_df = pd.read_csv(test_file, low_memory=False)
     #train_qns = train_df.iloc[:,1]
 
+    print ('read train file')
     for index, item in train_df.iterrows():
 
         qn = item[1].split(' ')
         qn_ls = [re.sub('[^A-Za-z0-9]+', '', q) for q in qn]
         qn_ls = [x.lower() for x in qn_ls]# if x not in stop_words]
         print (qn_ls)
+
         qn_idx = [glove_dict[x] if (x in glove_dict.keys()) else UNK for x in qn_ls]
+        print (qn_idx)
         qn_idxs.append(qn_idx)
+
 
     qn_npy = np.asarray(qn_idxs)
 
-    print (qn_npy.shape)
 
 
 
 
+def build_graph(glove_embd_file):
 
+    # Build the word embeddings
+    _, weights = load_glove_vectors(glove_embd_file)
 
-
-#def build_graph():
-
+    #print(weights.shape)
+    #print (weights[0])
 
 
 def main():
@@ -73,7 +88,9 @@ def main():
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(glove_vectors_file)
-    read_train_test_words(train_data,test_data,glove_vectors_file)
+    #read_train_test_words(train_data,test_data,glove_vectors_file)
+
+    build_graph(glove_vectors_file)
 
 
 main()
