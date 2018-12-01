@@ -6,46 +6,49 @@ stop_words = set(stopwords.words('english'))
 import pandas as pd
 import re
 import numpy as np
-
-#train_1 = train_df.loc[train_df['target'] == 1]
-#test_1 = test_df.loc[test_df['target'] == 1]
-
-#print (train_df.head(10))
-#print (train_df.shape)
-#print (train_1.shape)
+import tensorflow as tf
 
 
-glove_dict = {}
+cutoff_shape = 199999
+glove_dim = 300
+
+
 
 def load_glove_vectors(file):
 
     wts = []
-    temp_cache = '/home/nitin/Desktop/kaggle_data/all/temp.csv'
+    glove_dict = {}
 
-    with open(temp_cache,'w') as tmp:
-        with open (file,'r') as f:
-            for index, line in enumerate(f):
-                l = line.split(' ')
-                #tmp.write(str(index) + ',' + str(l[0] + '\n'))
 
-                #add to the global dictionary
-                #glove_dict[str(l[0]).strip().lower()] = index
-                del l[0]
-                #print ('appending:' + str(index))#
-                wts.append(l)
+    i = 0
+
+    with open (file,'r') as f:
+
+        for index, line in enumerate(f):
+            l = line.split(' ')
+
+            #add to the global dictionary
+            glove_dict[str(l[0]).strip().lower()] = index
+            del l[0]
+            wts.append(l)
+            i += 1
+            if (i > cutoff_shape): # for dev purposes only
+                break
 
 
     # contains the word embeddings. assumes indexes start from 0-based in the txt file
-    print ('To nupy')
-
     weights = np.asarray(wts)
+
+    assert weights.shape[1] == glove_dim
+    assert weights.shape[0] == cutoff_shape + 1
 
     return glove_dict, weights
 
 
 def read_train_test_words(train_file,test_file, glove_file):
 
-    UNK = 2196017
+    #UNK = 2196017
+    UNK = 200000
 
     qn_idxs = []
 
@@ -71,15 +74,35 @@ def read_train_test_words(train_file,test_file, glove_file):
 
 
 
+def build_graph():
+
+    embedding_const = tf.Variable(tf.constant(0.0,dtype=tf.float32,shape=[cutoff_shape + 1, glove_dim]),trainable=False,name="embedding_const")
+
+    embedding_placeholder = tf.placeholder(dtype=tf.float32,shape=[cutoff_shape + 1,glove_dim])
+    embedding_init = embedding_const.assign(embedding_placeholder)
 
 
-def build_graph(glove_embd_file):
+
+
+    return embedding_init, embedding_placeholder
+
+
+def build_session(glove_embed_file):
 
     # Build the word embeddings
-    _, weights = load_glove_vectors(glove_embd_file)
+    _, weights = load_glove_vectors(glove_embed_file)
 
-    #print(weights.shape)
-    #print (weights[0])
+    with tf.Graph().as_default() as gr:
+        embed_init, embed_placeholder = build_graph()
+
+
+    with tf.Session(graph=gr) as sess:
+
+        sess.run(tf.global_variables_initializer())
+        embeds = sess.run(embed_init,feed_dict = {embed_placeholder: weights})
+
+        assert embeds.shape[0] == cutoff_shape + 1
+        assert embeds.shape[1] == glove_dim
 
 
 def main():
@@ -90,7 +113,7 @@ def main():
     #load_glove_vectors(glove_vectors_file)
     #read_train_test_words(train_data,test_data,glove_vectors_file)
 
-    build_graph(glove_vectors_file)
+    build_session(glove_vectors_file)
 
 
 main()
