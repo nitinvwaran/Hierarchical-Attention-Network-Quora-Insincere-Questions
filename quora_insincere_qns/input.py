@@ -6,6 +6,7 @@ import nltk
 import pandas as pd
 import re
 import numpy as np
+np.set_printoptions(threshold=np.nan)
 import tensorflow as tf
 
 
@@ -103,6 +104,23 @@ def read_questions(train_file,test_file, glove_file):
 
 def build_graph(max_sentence_len):
 
+    def sparse_softmax(T):
+
+        # Creating partition based on condition:
+        condition_mask = tf.cast(tf.equal(T, 0.), tf.int32)
+        partitioned_T = tf.dynamic_partition(T, condition_mask, 2)
+        # Applying the operation to the target partition:
+        partitioned_T[0] = tf.nn.softmax(partitioned_T[0],axis=0)
+
+
+        # Stitching back together, flattening T and its indices to make things easier::
+        condition_indices = tf.dynamic_partition(tf.range(tf.size(T)), tf.reshape(condition_mask, [-1]), 2)
+        res_T = tf.dynamic_stitch(condition_indices, partitioned_T)
+        res_T = tf.reshape(res_T, tf.shape(T))
+
+        return res_T
+
+
     gru_units = 10
     output_size = 10
     cell_fw = tf.nn.rnn_cell.GRUCell(gru_units)
@@ -136,31 +154,29 @@ def build_graph(max_sentence_len):
 
     with tf.variable_scope("layer_word_attention"):
 
-        num_sentences = 1138 # may need hardcoding
-
         initializer = tf.contrib.layers.xavier_initializer()
 
         #Declare an 'attention context embedding matrix' of size equal number of sentences in the
         attention_context_vector = tf.get_variable(name='attention_context_vector',
-                                                   shape=[output_size,1],
+                                                   shape=[output_size],
                                                    initializer=initializer,
                                                    dtype=tf.float32)
 
         input_projection = tf.contrib.layers.fully_connected(outputs_hidden, output_size,
                                                   activation_fn=tf.nn.tanh)
 
+        vector_attn = tf.tensordot(input_projection,attention_context_vector,axes=[[2],[0]],name="vector_attn")
 
-        vector_attn = tf.tensordot(input_projection,attention_context_vector,axes=[[2],[0]])
-
-        #vector_attn = tf.reduce_sum(tf.multiply(input_projection, attention_context_vector), axis=2, keep_dims=True)
-        #attention_weights = tf.nn.softmax(vector_attn, dim=1)
+        attn_softmax = tf.map_fn(lambda batch:
+                               sparse_softmax(batch)
+                               , vector_attn, dtype=tf.float32)
         #weighted_projection = tf.multiply(input_projection, attention_weights)
 
     #outputs = tf.reduce_sum(weighted_projection, axis=1)
 
 
 
-    return embedding_init, embedding_placeholder, inputs, inputs_embed, batch_sequence_lengths,vector_attn, outputs_hidden
+    return embedding_init, embedding_placeholder, inputs, inputs_embed, batch_sequence_lengths,vector_attn, attn_softmax
 
 
 def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
@@ -169,14 +185,14 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
     _, weights = load_glove_vectors(glove_embed_file)
 
     with tf.Graph().as_default() as gr:
-        embed_init, embed_placeholder, inputs, input_embed, batch_sequence_lengths , vector_attn, outputs_hidden \
+        embed_init, embed_placeholder, inputs, input_embed, batch_sequence_lengths , vector_attn, attn_softmax \
             = build_graph(max_sentence_len)
 
 
     with tf.Session(graph=gr) as sess:
 
         sess.run(tf.global_variables_initializer())
-        embeds, input_embd, out, attn = sess.run([embed_init,input_embed, outputs_hidden,vector_attn], feed_dict = {
+        embeds, input_embd, out, attn = sess.run([embed_init,input_embed, vector_attn, attn_softmax], feed_dict = {
                 embed_placeholder: weights,
                 inputs : inputs_npy,
                 batch_sequence_lengths : qn_batch_len
@@ -191,6 +207,10 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
 
         print(out.shape)
         print (attn.shape)
+        print(attn[666])
+        print(out[666])
+        print(attn[0])
+        print(out[0])
 
 
 def main():
