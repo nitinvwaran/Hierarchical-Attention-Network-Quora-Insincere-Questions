@@ -156,7 +156,6 @@ def build_graph(max_sentence_len):
 
         initializer = tf.contrib.layers.xavier_initializer()
 
-        #Declare an 'attention context embedding matrix' of size equal number of sentences in the
         attention_context_vector = tf.get_variable(name='attention_context_vector',
                                                    shape=[output_size],
                                                    initializer=initializer,
@@ -164,19 +163,21 @@ def build_graph(max_sentence_len):
 
         input_projection = tf.contrib.layers.fully_connected(outputs_hidden, output_size,
                                                   activation_fn=tf.nn.tanh)
-
         vector_attn = tf.tensordot(input_projection,attention_context_vector,axes=[[2],[0]],name="vector_attn")
-
         attn_softmax = tf.map_fn(lambda batch:
                                sparse_softmax(batch)
                                , vector_attn, dtype=tf.float32)
-        #weighted_projection = tf.multiply(input_projection, attention_weights)
 
-    #outputs = tf.reduce_sum(weighted_projection, axis=1)
+        attn_softmax = tf.expand_dims(input=attn_softmax,axis=2,name='attn_softmax')
 
+        weighted_projection = tf.multiply(outputs_hidden, attn_softmax)
+        outputs = tf.reduce_sum(weighted_projection, axis=1)
 
+    return embedding_init, embedding_placeholder, \
+           inputs, inputs_embed, batch_sequence_lengths,\
+           vector_attn, attn_softmax, \
+           weighted_projection, outputs, outputs_hidden
 
-    return embedding_init, embedding_placeholder, inputs, inputs_embed, batch_sequence_lengths,vector_attn, attn_softmax
 
 
 def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
@@ -185,14 +186,18 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
     _, weights = load_glove_vectors(glove_embed_file)
 
     with tf.Graph().as_default() as gr:
-        embed_init, embed_placeholder, inputs, input_embed, batch_sequence_lengths , vector_attn, attn_softmax \
-            = build_graph(max_sentence_len)
+        embed_init, embed_placeholder, inputs,\
+        input_embed, batch_sequence_lengths ,\
+        vector_attn, attn_softmax, \
+        weighted_projection, outputs, outputs_hidden  = build_graph(max_sentence_len)
 
 
     with tf.Session(graph=gr) as sess:
 
         sess.run(tf.global_variables_initializer())
-        embeds, input_embd, out, attn = sess.run([embed_init,input_embed, vector_attn, attn_softmax], feed_dict = {
+        embeds, input_embd, out, attn , weighted, outs, outs_hidden  = \
+            sess.run([embed_init,input_embed, vector_attn, attn_softmax,
+                      weighted_projection,outputs, outputs_hidden ], feed_dict = {
                 embed_placeholder: weights,
                 inputs : inputs_npy,
                 batch_sequence_lengths : qn_batch_len
@@ -207,10 +212,10 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
 
         print(out.shape)
         print (attn.shape)
-        print(attn[666])
-        print(out[666])
-        print(attn[0])
-        print(out[0])
+
+        print(weighted.shape)
+        print(outs_hidden.shape)
+        print(outs.shape)
 
 
 def main():
