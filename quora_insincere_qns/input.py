@@ -7,6 +7,8 @@ import pandas as pd
 import re
 import numpy as np
 np.set_printoptions(threshold=np.nan)
+import operator
+
 import tensorflow as tf
 
 
@@ -55,6 +57,7 @@ def read_questions(train_file,test_file, glove_file):
     #UNK = 2196017
     UNK = cutoff_shape + 1
     _NULL = cutoff_shape + 2
+    sentence_batch_len = []
 
     glove_dict, _ = load_glove_vectors(glove_file)
     train_df = pd.read_csv(train_file, low_memory=False)
@@ -78,7 +81,9 @@ def read_questions(train_file,test_file, glove_file):
         #print (qn3)
         qn_ls = [re.sub('[^A-Za-z0-9 ]+', '', q) for q in qn3]
         qn_ls = [x.lower() for x in qn_ls]  # if x not in stop_words]
-        #print (qn_ls)
+
+        sentence_batch_len.append(len(qn_ls))
+
         # word level tokens
         qn_ls_word = [x.split(' ') for x in qn_ls]
         #print (qn_ls_word)
@@ -98,11 +103,10 @@ def read_questions(train_file,test_file, glove_file):
         item += [_NULL] * (max_sentence_len - len(item))
 
     qn_npy = np.asarray(qn_ls_word_idx)
+    return qn_npy, qn_batch_len,max_sentence_len, sentence_batch_len
 
-    return qn_npy, qn_batch_len,max_sentence_len
 
-
-def build_graph(max_sentence_len):
+def build_graph(max_sentence_len,sentence_batch_len):
 
     def sparse_softmax(T):
 
@@ -119,7 +123,6 @@ def build_graph(max_sentence_len):
         res_T = tf.reshape(res_T, tf.shape(T))
 
         return res_T
-
 
     gru_units = 10
     output_size = 10
@@ -173,14 +176,39 @@ def build_graph(max_sentence_len):
         weighted_projection = tf.multiply(outputs_hidden, attn_softmax)
         outputs = tf.reduce_sum(weighted_projection, axis=1)
 
+    with tf.variable_scope('layer_gather'):
+
+        # Get max sentence len for padding
+        running_index = 0
+
+        index, max_value = max(enumerate(sentence_batch_len), key=operator.itemgetter(1))
+
+        print ('Index', 'Maxval')
+        print (index)
+        print (max_value)
+
+        sentence_batch_len = [3]
+        for item in sentence_batch_len:
+            print (item)
+            slice = []
+            for i in range(0,item):
+                slice.append(running_index)
+                running_index += 1
+                print (len(slice))
+
+            tf_slice = tf.gather(outputs,slice)
+            tf_slice_padding = tf.constant([[0,max_value - len(slice)],[0,0]])
+            tf_slice_padded = tf.pad(tf_slice,tf_slice_padding,'CONSTANT')
+
+
     return embedding_init, embedding_placeholder, \
            inputs, inputs_embed, batch_sequence_lengths,\
            vector_attn, attn_softmax, \
-           weighted_projection, outputs, outputs_hidden
+           weighted_projection, tf_slice_padded, outputs, outputs_hidden
 
 
 
-def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
+def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len,sentence_batch_len):
 
     # Build the word embeddings
     _, weights = load_glove_vectors(glove_embed_file)
@@ -189,15 +217,15 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
         embed_init, embed_placeholder, inputs,\
         input_embed, batch_sequence_lengths ,\
         vector_attn, attn_softmax, \
-        weighted_projection, outputs, outputs_hidden  = build_graph(max_sentence_len)
+        weighted_projection, out2, outputs,outputs_hidden  = build_graph(max_sentence_len,sentence_batch_len)
 
 
     with tf.Session(graph=gr) as sess:
 
         sess.run(tf.global_variables_initializer())
-        embeds, input_embd, out, attn , weighted, outs, outs_hidden  = \
+        embeds, input_embd, out, attn , weighted, out2, outs, outs_hidden  = \
             sess.run([embed_init,input_embed, vector_attn, attn_softmax,
-                      weighted_projection,outputs, outputs_hidden ], feed_dict = {
+                      weighted_projection, out2, outputs, outputs_hidden ], feed_dict = {
                 embed_placeholder: weights,
                 inputs : inputs_npy,
                 batch_sequence_lengths : qn_batch_len
@@ -215,7 +243,8 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len):
 
         print(weighted.shape)
         print(outs_hidden.shape)
-        print(outs.shape)
+        print(outs)
+        print (out2)
 
 
 def main():
@@ -227,8 +256,8 @@ def main():
     #read_train_test_words(train_data,test_data,glove_vectors_file)
 
     #build_session(glove_vectors_file)
-    qn_npy, qn_batch_len, max_len = read_questions(train_data,test_data,glove_vectors_file)
-    build_session(qn_npy,glove_vectors_file,max_len,qn_batch_len)
+    qn_npy, qn_batch_len, max_len, sentence_batch_len = read_questions(train_data,test_data,glove_vectors_file)
+    build_session(qn_npy,glove_vectors_file,max_len,qn_batch_len, sentence_batch_len)
 
 
 
