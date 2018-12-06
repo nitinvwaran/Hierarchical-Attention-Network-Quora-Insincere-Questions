@@ -183,28 +183,32 @@ def build_graph(max_sentence_len,sentence_batch_len):
 
         index, max_value = max(enumerate(sentence_batch_len), key=operator.itemgetter(1))
 
-        print ('Index', 'Maxval')
-        print (index)
-        print (max_value)
-
-        sentence_batch_len = [3]
+        tf_padded_final = tf.zeros(shape=[1,max_value,20])
         for item in sentence_batch_len:
-            print (item)
+
+            # Get the slice for every batch len
             slice = []
             for i in range(0,item):
                 slice.append(running_index)
                 running_index += 1
-                print (len(slice))
 
+            print (slice)
             tf_slice = tf.gather(outputs,slice)
             tf_slice_padding = tf.constant([[0,max_value - len(slice)],[0,0]])
             tf_slice_padded = tf.pad(tf_slice,tf_slice_padding,'CONSTANT')
+
+            tf_slice_padded_3D = tf.expand_dims(tf_slice_padded,axis=0)
+
+            tf_padded_final= tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
+
+        # Give it a haircut
+        tf_padded_final = tf_padded_final[1:,:]
 
 
     return embedding_init, embedding_placeholder, \
            inputs, inputs_embed, batch_sequence_lengths,\
            vector_attn, attn_softmax, \
-           weighted_projection, tf_slice_padded, outputs, outputs_hidden
+           weighted_projection, tf_padded_final, outputs, outputs_hidden
 
 
 
@@ -243,8 +247,11 @@ def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len,s
 
         print(weighted.shape)
         print(outs_hidden.shape)
-        print(outs)
-        print (out2)
+        print(outs[17])
+        print(outs[18])
+        print(outs[19])
+        print (out2.shape)
+        print(out2[14])
 
 
 def main():
