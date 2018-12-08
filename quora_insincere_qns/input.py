@@ -8,21 +8,40 @@ import re
 import numpy as np
 np.set_printoptions(threshold=np.nan)
 import operator
+from sklearn.model_selection import train_test_split
 
 import tensorflow as tf
+#tf.enable_eager_execution()
+#print(tf.executing_eagerly())
 
 
 cutoff_shape = 199999
 glove_dim = 300
+max_seq_len = 122
+max_sent_seq_len = 12 # 12 sentences in a doc
 
-def load_glove_vectors(file):
+def get_max_len(train_file):
+
+    max = -1
+    df = pd.read_csv(train_file,low_memory=False)
+    for index, item in df.iterrows():
+        l = len(str(item[1]).split(' '))
+        #print (l)
+        if (max < l):
+            max = l
+
+    print ('Max is:')
+    print (max)
+
+
+def load_glove_vectors(glove_file):
 
     wts = []
     glove_dict = {}
 
     i = 0
 
-    with open (file,'r') as f:
+    with open (glove_file,'r') as f:
 
         for index, line in enumerate(f):
             l = line.split(' ')
@@ -52,26 +71,39 @@ def load_glove_vectors(file):
     return glove_dict, weights
 
 
-def read_questions(train_file,test_file, glove_file):
+def get_train_df_glove_dict(train_file, glove_file):
+
+    df = pd.read_csv(train_file,low_memory=False)
+    y = df.loc[:,'target']
+
+    X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.1, stratify=y, random_state = 42)
+
+    glove_dict, weights = load_glove_vectors(glove_file)
+
+    return X_train, X_dev, glove_dict, weights
+
+
+
+def process_questions(qn_df, glove_dict):
 
     #UNK = 2196017
     UNK = cutoff_shape + 1
     _NULL = cutoff_shape + 2
     sentence_batch_len = []
 
-    glove_dict, _ = load_glove_vectors(glove_file)
-    train_df = pd.read_csv(train_file, low_memory=False)
+    #glove_dict, _ = load_glove_vectors(glove_file)
+    #train_df = pd.read_csv(train_file, low_memory=False)
     #test_df = pd.read_csv(test_file, low_memory=False)
     #train_qns = train_df.iloc[:,1]
 
     qn_ls_word_idx = []
     qn_batch_len = []
-    max_sentence_len = -1
+    #max_sentence_len = -1
 
-    for index, item in train_df.iterrows():
+    for index, item in qn_df.iterrows():
 
-        if (index > 1000): # dev purposes only
-            break
+        #if (index > 1000): # dev purposes only
+        #    break
 
         qn1 = item[1].split('. ') # Extract the sentences
         #print (qn1)
@@ -91,8 +123,8 @@ def read_questions(train_file,test_file, glove_file):
         for y in qn_ls_word:
             tmp = [glove_dict[x] if (x in glove_dict.keys()) else UNK for x in y]
 
-            if (len(tmp) > max_sentence_len):
-                max_sentence_len = len(tmp)
+            #if (len(tmp) > max_sentence_len):
+            #    max_sentence_len = len(tmp)
 
             qn_ls_word_idx.append(tmp)
             qn_batch_len.append(len(tmp))
@@ -100,13 +132,22 @@ def read_questions(train_file,test_file, glove_file):
     # Now we have max_len, a flattened sentence matrix, and batch sequence length for dynamic rnn.
     # Apply the _null padding.
     for item in qn_ls_word_idx:
-        item += [_NULL] * (max_sentence_len - len(item))
+        item += [_NULL] * (max_seq_len - len(item))
+
+
+    #max_l = -1
+    #for item in sentence_batch_len:
+    #    if (max_l < item):
+    #        max_l = item
+    #print ('The max sentence batch')
+    #print (max_l)
 
     qn_npy = np.asarray(qn_ls_word_idx)
-    return qn_npy, qn_batch_len,max_sentence_len, sentence_batch_len
+
+    return qn_npy, qn_batch_len, sentence_batch_len # Flattened qn_lengths, and sentence_len at document level
 
 
-def build_graph(max_sentence_len,sentence_batch_len):
+def build_graph(max_sentence_len, mini_batch_size):
 
     def sparse_softmax(T):
 
@@ -116,7 +157,6 @@ def build_graph(max_sentence_len,sentence_batch_len):
         # Applying the operation to the target partition:
         partitioned_T[0] = tf.nn.softmax(partitioned_T[0],axis=0)
 
-
         # Stitching back together, flattening T and its indices to make things easier::
         condition_indices = tf.dynamic_partition(tf.range(tf.size(T)), tf.reshape(condition_mask, [-1]), 2)
         res_T = tf.dynamic_stitch(condition_indices, partitioned_T)
@@ -124,10 +164,18 @@ def build_graph(max_sentence_len,sentence_batch_len):
 
         return res_T
 
+
     gru_units = 10
     output_size = 10
+
+    gru_units_sent = 10
+    output_size_sent = 10
+
     cell_fw = tf.nn.rnn_cell.GRUCell(gru_units)
     cell_bw = tf.nn.rnn_cell.GRUCell(gru_units)
+
+    cell_sent_fw = tf.nn.rnn_cell.GRUCell(gru_units_sent)
+    cell_sent_bw = tf.nn.rnn_cell.GRUCell(gru_units_sent)
 
     # First fetch the pre-trained word embeddings into variable
     # + 2 because of the UNK weight and the 0-index start
@@ -179,92 +227,216 @@ def build_graph(max_sentence_len,sentence_batch_len):
     with tf.variable_scope('layer_gather'):
 
         # Get max sentence len for padding
-        running_index = 0
 
-        index, max_value = max(enumerate(sentence_batch_len), key=operator.itemgetter(1))
+        tf_padded_final = tf.zeros(shape=[1,max_sent_seq_len,output_size * 2])
+        sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
+        sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
 
-        tf_padded_final = tf.zeros(shape=[1,max_value,20])
-        for item in sentence_batch_len:
-
-            # Get the slice for every batch len
-            slice = []
-            for i in range(0,item):
-                slice.append(running_index)
-                running_index += 1
-
-            print (slice)
-            tf_slice = tf.gather(outputs,slice)
-            tf_slice_padding = tf.constant([[0,max_value - len(slice)],[0,0]])
-            tf_slice_padded = tf.pad(tf_slice,tf_slice_padding,'CONSTANT')
-
-            tf_slice_padded_3D = tf.expand_dims(tf_slice_padded,axis=0)
-
-            tf_padded_final= tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
-
-        # Give it a haircut
-        tf_padded_final = tf_padded_final[1:,:]
+        s = sentence_index_offsets[995,0]
+        t = tf.range(start=1135,limit=1138)
 
 
-    return embedding_init, embedding_placeholder, \
-           inputs, inputs_embed, batch_sequence_lengths,\
-           vector_attn, attn_softmax, \
-           weighted_projection, tf_padded_final, outputs, outputs_hidden
+        i = tf.constant(0)
+        t_max_seq_sent_length = tf.constant(max_sent_seq_len)
+        mb = tf.constant(mini_batch_size - 1)
+
+        while_cond = lambda i,tf_padded_final: tf.less(i,mb)
+
+        def body(i,tf_padded_final):
+
+            end_idx = sentence_index_offsets[i,1]
+            st_idx = sentence_index_offsets[i,0]
+            tf_range = tf.range(start=st_idx,limit=end_idx)
+            id = sentence_batch_len[i]
+
+            tf_slice = tf.gather(outputs,tf_range)
+            #tf_slice_padding = tf.constant([[0, t_max_seq_sent_length - id], [0, 0]])
+            #tf_slice_padded = tf.pad(tf_slice, tf_slice_padding, 'CONSTANT')
+            tf_slice_padded_3D = tf.expand_dims(tf_slice, axis=0)
+
+            tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
+
+            tf.add(i,1)
+
+            return i, tf_padded_final
+
+        _, tfpadded_final = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,20])])
 
 
 
-def build_session(inputs_npy, glove_embed_file, max_sentence_len, qn_batch_len,sentence_batch_len):
+    with tf.variable_scope('layer_sentence_hidden_states'):
 
-    # Build the word embeddings
-    _, weights = load_glove_vectors(glove_embed_file)
+        ((fw_outputs_sent, bw_outputs_sent),
+         _) = (
+            tf.nn.bidirectional_dynamic_rnn(cell_fw=cell_sent_fw,
+                                            cell_bw=cell_sent_bw,
+                                            inputs=tfpadded_final,
+                                            sequence_length=sentence_batch_len,
+                                            dtype=tf.float32,
+                                            swap_memory=True,
+                                            ))
+        outputs_hidden_sent = tf.concat((fw_outputs_sent, bw_outputs_sent), 2)
 
+    with tf.variable_scope('layer_sentence_attention'):
+
+        initializer_sent = tf.contrib.layers.xavier_initializer()
+
+        attention_context_vector_sent = tf.get_variable(name='attention_context_vector_sent',
+                                                   shape=[output_size_sent],
+                                                   initializer=initializer_sent,
+                                                   dtype=tf.float32)
+
+        input_projection_sent = tf.contrib.layers.fully_connected(outputs_hidden_sent, output_size_sent,
+                                                             activation_fn=tf.nn.tanh)
+        vector_attn_sent = tf.tensordot(input_projection_sent, attention_context_vector_sent, axes=[[2], [0]], name="vector_attn_sent")
+        attn_softmax_sent = tf.map_fn(lambda batch:
+                                 sparse_softmax(batch)
+                                 , vector_attn_sent, dtype=tf.float32)
+
+        attn_softmax_sent = tf.expand_dims(input=attn_softmax_sent, axis=2, name='attn_softmax_sent')
+
+        weighted_projection_sent = tf.multiply(outputs_hidden_sent, attn_softmax_sent)
+        outputs_sent = tf.reduce_sum(weighted_projection_sent, axis=1)
+
+    with tf.variable_scope('layer_classification'):
+
+        wt_init = tf.contrib.layers.xavier_initializer()
+        wt = tf.get_variable(name="wt",shape=[output_size_sent * 2,1],initializer=wt_init)
+        bias = tf.get_variable(name="bias",shape=[1],initializer=tf.zeros_initializer())
+
+        logits = tf.add(tf.matmul(outputs_sent,wt),bias)
+        probs = tf.sigmoid(logits)
+
+
+    #return embedding_init, embedding_placeholder, \
+    #       inputs, inputs_embed, batch_sequence_lengths,\
+    #       vector_attn, attn_softmax, \
+    #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
+
+    return probs, logits, embedding_placeholder,inputs,batch_sequence_lengths, sentence_batch_len, \
+            sentence_index_offsets, s,t
+
+
+def build_loss_optimizer(self, logits):
+
+    # Create the back propagation and training evaluation machinery in the graph.
+    with tf.name_scope('cross_entropy'):
+        # Define loss and optimizer
+        ground_truth_input = tf.placeholder(
+            tf.int64, [None], name='groundtruth_input')
+
+        cross_entropy_mean = tf.nn.sigmoid_cross_entropy_with_logits(
+            labels=ground_truth_input, logits=logits)
+        learning_rate_input = tf.placeholder(
+            tf.float32, [], name='learning_rate_input')
+
+        loss = tf.reduce_mean(cross_entropy_mean, name="cross_entropy_loss")
+
+        #extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)  # For batch normalization ops update
+        #with tf.control_dependencies(extra_update_ops):
+        train_step = tf.train.AdamOptimizer(
+            learning_rate_input).minimize(loss)
+
+        predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
+        confusion_matrix = tf.confusion_matrix(
+            ground_truth_input, predicted_indices, num_classes=2, name="confusion_matrix")
+
+    return ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss
+
+
+def build_session(train_file, glove_file):
+
+    num_epochs = 20
+    mini_batch_size = 1000
+
+    print ('max sentence len')
+    print (max_seq_len)
+
+    # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
-        embed_init, embed_placeholder, inputs,\
-        input_embed, batch_sequence_lengths ,\
-        vector_attn, attn_softmax, \
-        weighted_projection, out2, outputs,outputs_hidden  = build_graph(max_sentence_len,sentence_batch_len)
+        final_probs, logits, embedding_placeholder, inputs, batch_sequence_lengths, sentence_batch_len,\
+         sentence_index_offsets, s, t = \
+            build_graph(max_seq_len,mini_batch_size)
+
+    X_train, X_dev, glove_dict, weights_embed = get_train_df_glove_dict(train_file, glove_file)
+
+    for i in range(0,1):
+
+        # Sample mini batch of documents
+        train_sample = X_train.sample(n = mini_batch_size)
+        qn_npy, qn_batch_len,  sentence_len = process_questions(train_sample,glove_dict)
+
+        sentence_offsets = np.cumsum(sentence_len)
+        sentence_offsets = sentence_offsets - sentence_len
+        sentence_offsets_2 = np.delete(sentence_offsets,0)
+        sentence_offsets_3 = np.delete(sentence_offsets,sentence_offsets.shape[0] - 1)
+
+        #print ('Numpy!')
+        #print (sentence_offsets_3)
+        #print (sentence_offsets_2)
+
+        #np_offsets = np.asarray(sentence_offsets)
+        #np_len = np.asarray(sentence_len)
+
+        np_offsets_len = np.column_stack([sentence_offsets_3,sentence_offsets_2])
+        print (np_offsets_len)
+
+        #print (np_offsets_len)
+        #print (np_offsets_len.shape)
+        #print (np_offsets_len[0])
+
+        '''
+        ls_offsets = []
+        for index, z in enumerate(sentence_len):
+            temp2 = []
+            for p in range(0,z):
+                temp2.append(sentence_offsets[index] + p)
+
+            ls_offsets.append(temp2)
+
+        np_offsets = np.asarray(ls_offsets)
+        '''
 
 
-    with tf.Session(graph=gr) as sess:
+        with tf.Session(graph=gr) as sess:
 
-        sess.run(tf.global_variables_initializer())
-        embeds, input_embd, out, attn , weighted, out2, outs, outs_hidden  = \
-            sess.run([embed_init,input_embed, vector_attn, attn_softmax,
-                      weighted_projection, out2, outputs, outputs_hidden ], feed_dict = {
-                embed_placeholder: weights,
-                inputs : inputs_npy,
-                batch_sequence_lengths : qn_batch_len
-        })
+            sess.run(tf.global_variables_initializer())
+            final_probs, logits, s1,t1 = \
+                sess.run([final_probs, logits, s,t], feed_dict = {
+                    embedding_placeholder: weights_embed,
+                    inputs : qn_npy,
+                    batch_sequence_lengths : qn_batch_len,
+                    sentence_batch_len : sentence_len,
+                    sentence_index_offsets : np_offsets_len
+            })
 
-        assert embeds.shape[0] == cutoff_shape + 3
-        assert embeds.shape[1] == glove_dim
+            #print (final_probs)
+            #print (logits)
+            print (s1)
+            print (t1)
 
-        assert input_embd.shape[2] == glove_dim
-        assert input_embd.shape[1] == max_sentence_len
+            #assert embeds.shape[0] == cutoff_shape + 3
+            #assert embeds.shape[1] == glove_dim
 
+            #assert input_embd.shape[2] == glove_dim
+            #assert input_embd.shape[1] == max_sentence_len
 
-        print(out.shape)
-        print (attn.shape)
-
-        print(weighted.shape)
-        print(outs_hidden.shape)
-        print(outs[17])
-        print(outs[18])
-        print(outs[19])
-        print (out2.shape)
-        print(out2[14])
 
 
 def main():
-    glove_vectors_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    train_data = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
+    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(glove_vectors_file)
     #read_train_test_words(train_data,test_data,glove_vectors_file)
 
     #build_session(glove_vectors_file)
-    qn_npy, qn_batch_len, max_len, sentence_batch_len = read_questions(train_data,test_data,glove_vectors_file)
-    build_session(qn_npy,glove_vectors_file,max_len,qn_batch_len, sentence_batch_len)
+    build_session(train_file,glove_file)
+    #sampling(train_data)
+
+    #glove_dict, wt = load_glove_vectors(glove_vectors_file)
+    #process_questions(df,glove_dict)
 
 
 
