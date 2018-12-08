@@ -7,18 +7,15 @@ import pandas as pd
 import re
 import numpy as np
 np.set_printoptions(threshold=np.nan)
-import operator
 from sklearn.model_selection import train_test_split
 
 import tensorflow as tf
-#tf.enable_eager_execution()
-#print(tf.executing_eagerly())
-
 
 cutoff_shape = 199999
 glove_dim = 300
 max_seq_len = 122
 max_sent_seq_len = 12 # 12 sentences in a doc
+
 
 def get_max_len(train_file):
 
@@ -229,40 +226,42 @@ def build_graph(max_sentence_len, mini_batch_size):
         # Get max sentence len for padding
 
         tf_padded_final = tf.zeros(shape=[1,max_sent_seq_len,output_size * 2])
+        #tf_padded_final = tf.zeros(shape=[1,1,output_size * 2])
         sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
         sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
 
-        s = sentence_index_offsets[995,0]
-        t = tf.range(start=1135,limit=1138)
-
-
         i = tf.constant(0)
-        t_max_seq_sent_length = tf.constant(max_sent_seq_len)
-        mb = tf.constant(mini_batch_size - 1)
 
-        while_cond = lambda i,tf_padded_final: tf.less(i,mb)
+        # A proud moment =)
+        # Used tensorflow conditionals for the first time!!
+        def while_cond (i, tf_padded_final):
+            mb = tf.constant(mini_batch_size)
+            return tf.less(i,mb)
 
         def body(i,tf_padded_final):
 
+            #tf.print(i,[i])
             end_idx = sentence_index_offsets[i,1]
             st_idx = sentence_index_offsets[i,0]
             tf_range = tf.range(start=st_idx,limit=end_idx)
-            id = sentence_batch_len[i]
+            pad_len = max_sent_seq_len - sentence_batch_len[i]
 
             tf_slice = tf.gather(outputs,tf_range)
-            #tf_slice_padding = tf.constant([[0, t_max_seq_sent_length - id], [0, 0]])
-            #tf_slice_padded = tf.pad(tf_slice, tf_slice_padding, 'CONSTANT')
-            tf_slice_padded_3D = tf.expand_dims(tf_slice, axis=0)
+            tf_slice_padding = [[0, pad_len], [0, 0]]
+            tf_slice_padded = tf.pad(tf_slice, tf_slice_padding, 'CONSTANT')
+            tf_slice_padded_3D = tf.expand_dims(tf_slice_padded, axis=0)
 
             tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
 
-            tf.add(i,1)
+            i = tf.add(i,1)
 
             return i, tf_padded_final
 
-        _, tfpadded_final = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,20])])
+        _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,20])])
 
 
+    # Give it a haircut
+    tf_padded_final_2 = tf_padded_final_2[1:,:]
 
     with tf.variable_scope('layer_sentence_hidden_states'):
 
@@ -270,7 +269,7 @@ def build_graph(max_sentence_len, mini_batch_size):
          _) = (
             tf.nn.bidirectional_dynamic_rnn(cell_fw=cell_sent_fw,
                                             cell_bw=cell_sent_bw,
-                                            inputs=tfpadded_final,
+                                            inputs=tf_padded_final_2,
                                             sequence_length=sentence_batch_len,
                                             dtype=tf.float32,
                                             swap_memory=True,
@@ -314,7 +313,7 @@ def build_graph(max_sentence_len, mini_batch_size):
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
     return probs, logits, embedding_placeholder,inputs,batch_sequence_lengths, sentence_batch_len, \
-            sentence_index_offsets, s,t
+            sentence_index_offsets, tf_padded_final_2, outputs
 
 
 def build_loss_optimizer(self, logits):
@@ -347,7 +346,7 @@ def build_loss_optimizer(self, logits):
 def build_session(train_file, glove_file):
 
     num_epochs = 20
-    mini_batch_size = 1000
+    mini_batch_size = 10
 
     print ('max sentence len')
     print (max_seq_len)
@@ -355,7 +354,7 @@ def build_session(train_file, glove_file):
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits, embedding_placeholder, inputs, batch_sequence_lengths, sentence_batch_len,\
-         sentence_index_offsets, s, t = \
+         sentence_index_offsets, tfpadded_final,  outputs = \
             build_graph(max_seq_len,mini_batch_size)
 
     X_train, X_dev, glove_dict, weights_embed = get_train_df_glove_dict(train_file, glove_file)
@@ -367,9 +366,8 @@ def build_session(train_file, glove_file):
         qn_npy, qn_batch_len,  sentence_len = process_questions(train_sample,glove_dict)
 
         sentence_offsets = np.cumsum(sentence_len)
-        sentence_offsets = sentence_offsets - sentence_len
-        sentence_offsets_2 = np.delete(sentence_offsets,0)
-        sentence_offsets_3 = np.delete(sentence_offsets,sentence_offsets.shape[0] - 1)
+        sentence_offsets_2 = np.insert(sentence_offsets,0,0,axis=0)
+        sentence_offsets_3 = np.delete(sentence_offsets_2,sentence_offsets_2.shape[0] - 1)
 
         #print ('Numpy!')
         #print (sentence_offsets_3)
@@ -378,7 +376,10 @@ def build_session(train_file, glove_file):
         #np_offsets = np.asarray(sentence_offsets)
         #np_len = np.asarray(sentence_len)
 
-        np_offsets_len = np.column_stack([sentence_offsets_3,sentence_offsets_2])
+        np_offsets_len = np.column_stack([sentence_offsets_3,sentence_offsets])
+        print(sentence_len)
+        print (sentence_offsets)
+
         print (np_offsets_len)
 
         #print (np_offsets_len)
@@ -401,8 +402,8 @@ def build_session(train_file, glove_file):
         with tf.Session(graph=gr) as sess:
 
             sess.run(tf.global_variables_initializer())
-            final_probs, logits, s1,t1 = \
-                sess.run([final_probs, logits, s,t], feed_dict = {
+            final_probs, logits,t1,out = \
+                sess.run([final_probs, logits,tfpadded_final, outputs], feed_dict = {
                     embedding_placeholder: weights_embed,
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
@@ -410,10 +411,15 @@ def build_session(train_file, glove_file):
                     sentence_index_offsets : np_offsets_len
             })
 
-            #print (final_probs)
-            #print (logits)
-            print (s1)
-            print (t1)
+
+            print (out.shape)
+            print(out[out.shape[0] - 1])
+            print (t1.shape)
+            print (t1[t1.shape[0] - 1])
+
+            print(final_probs)
+            print(logits)
+
 
             #assert embeds.shape[0] == cutoff_shape + 3
             #assert embeds.shape[1] == glove_dim
