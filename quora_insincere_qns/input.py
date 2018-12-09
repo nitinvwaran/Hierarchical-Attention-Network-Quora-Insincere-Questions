@@ -204,6 +204,7 @@ def build_graph(max_sentence_len, mini_batch_size):
 
         initializer = tf.contrib.layers.xavier_initializer()
 
+        # Big brain #1
         attention_context_vector = tf.get_variable(name='attention_context_vector',
                                                    shape=[output_size],
                                                    initializer=initializer,
@@ -222,8 +223,6 @@ def build_graph(max_sentence_len, mini_batch_size):
         outputs = tf.reduce_sum(weighted_projection, axis=1)
 
     with tf.variable_scope('layer_gather'):
-
-        # Get max sentence len for padding
 
         tf_padded_final = tf.zeros(shape=[1,max_sent_seq_len,output_size * 2])
         #tf_padded_final = tf.zeros(shape=[1,1,output_size * 2])
@@ -280,6 +279,7 @@ def build_graph(max_sentence_len, mini_batch_size):
 
         initializer_sent = tf.contrib.layers.xavier_initializer()
 
+        # Big brain #2 (or is this Pinky..?)
         attention_context_vector_sent = tf.get_variable(name='attention_context_vector_sent',
                                                    shape=[output_size_sent],
                                                    initializer=initializer_sent,
@@ -304,8 +304,8 @@ def build_graph(max_sentence_len, mini_batch_size):
         bias = tf.get_variable(name="bias",shape=[1],initializer=tf.zeros_initializer())
 
         logits = tf.add(tf.matmul(outputs_sent,wt),bias)
+        logits = tf.squeeze(logits)
         probs = tf.sigmoid(logits)
-
 
     #return embedding_init, embedding_placeholder, \
     #       inputs, inputs_embed, batch_sequence_lengths,\
@@ -313,16 +313,16 @@ def build_graph(max_sentence_len, mini_batch_size):
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
     return probs, logits, embedding_placeholder,inputs,batch_sequence_lengths, sentence_batch_len, \
-            sentence_index_offsets, tf_padded_final_2, outputs
+            sentence_index_offsets
 
 
-def build_loss_optimizer(self, logits):
+def build_loss_optimizer(logits):
 
     # Create the back propagation and training evaluation machinery in the graph.
     with tf.name_scope('cross_entropy'):
         # Define loss and optimizer
         ground_truth_input = tf.placeholder(
-            tf.int64, [None], name='groundtruth_input')
+            tf.float32, [None], name='groundtruth_input')
 
         cross_entropy_mean = tf.nn.sigmoid_cross_entropy_with_logits(
             labels=ground_truth_input, logits=logits)
@@ -336,7 +336,8 @@ def build_loss_optimizer(self, logits):
         train_step = tf.train.AdamOptimizer(
             learning_rate_input).minimize(loss)
 
-        predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
+        #predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
+        predicted_indices = tf.to_int32(tf.greater_equal(logits,0.5))
         confusion_matrix = tf.confusion_matrix(
             ground_truth_input, predicted_indices, num_classes=2, name="confusion_matrix")
 
@@ -346,79 +347,127 @@ def build_loss_optimizer(self, logits):
 def build_session(train_file, glove_file):
 
     num_epochs = 20
-    mini_batch_size = 10
+    mini_batch_size = 1000
+    learning_rate = 0.001
 
-    print ('max sentence len')
-    print (max_seq_len)
+    validation_batch_size = 1000
 
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits, embedding_placeholder, inputs, batch_sequence_lengths, sentence_batch_len,\
-         sentence_index_offsets, tfpadded_final,  outputs = \
+         sentence_index_offsets = \
             build_graph(max_seq_len,mini_batch_size)
 
+        ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss \
+            = build_loss_optimizer(logits=logits)
+
     X_train, X_dev, glove_dict, weights_embed = get_train_df_glove_dict(train_file, glove_file)
+
+    valid_set_shape = X_dev.shape[0]
 
     for i in range(0,1):
 
         # Sample mini batch of documents
         train_sample = X_train.sample(n = mini_batch_size)
         qn_npy, qn_batch_len,  sentence_len = process_questions(train_sample,glove_dict)
+        y_train = np.asarray(train_sample.loc[:,'target'])
 
+
+        # Create a matrix with each row as sentence offsets
+        # That gets used to rollup the flattened sentences into their documents
         sentence_offsets = np.cumsum(sentence_len)
         sentence_offsets_2 = np.insert(sentence_offsets,0,0,axis=0)
         sentence_offsets_3 = np.delete(sentence_offsets_2,sentence_offsets_2.shape[0] - 1)
-
-        #print ('Numpy!')
-        #print (sentence_offsets_3)
-        #print (sentence_offsets_2)
-
-        #np_offsets = np.asarray(sentence_offsets)
-        #np_len = np.asarray(sentence_len)
-
         np_offsets_len = np.column_stack([sentence_offsets_3,sentence_offsets])
-        print(sentence_len)
-        print (sentence_offsets)
-
-        print (np_offsets_len)
-
-        #print (np_offsets_len)
-        #print (np_offsets_len.shape)
-        #print (np_offsets_len[0])
-
-        '''
-        ls_offsets = []
-        for index, z in enumerate(sentence_len):
-            temp2 = []
-            for p in range(0,z):
-                temp2.append(sentence_offsets[index] + p)
-
-            ls_offsets.append(temp2)
-
-        np_offsets = np.asarray(ls_offsets)
-        '''
-
 
         with tf.Session(graph=gr) as sess:
 
             sess.run(tf.global_variables_initializer())
-            final_probs, logits,t1,out = \
-                sess.run([final_probs, logits,tfpadded_final, outputs], feed_dict = {
+            _, train_confusion_matrix, train_loss= \
+                sess.run([train_step,confusion_matrix, loss], feed_dict = {
                     embedding_placeholder: weights_embed,
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
                     sentence_batch_len : sentence_len,
-                    sentence_index_offsets : np_offsets_len
+                    sentence_index_offsets : np_offsets_len,
+                    learning_rate_input : learning_rate,
+                    ground_truth_input : y_train
             })
 
+            print ('Training Confusion Matrix')
+            print (train_confusion_matrix)
+            print ('Train loss')
+            print (train_loss)
 
-            print (out.shape)
-            print(out[out.shape[0] - 1])
-            print (t1.shape)
-            print (t1[t1.shape[0] - 1])
+            # Validation machinery
+            if (i % 10 == 0):
 
-            print(final_probs)
-            print(logits)
+                valid_conf_matrix = None
+                validation_loss = None
+
+                print ('Valid set shape')
+                print (valid_set_shape)
+
+                for j in range(0,valid_set_shape,validation_batch_size):
+
+                    print ('J is')
+                    print (j)
+
+                    if (j + validation_batch_size >= valid_set_shape):
+                        validation_batch_size = valid_set_shape - j - 1
+
+                    valid_sample = X_dev[j:j+validation_batch_size - 1]
+                    y_valid = valid_sample.loc[:,'target']
+
+                    qn_npy_valid, qn_batch_len_valid, sentence_len_valid = process_questions(valid_sample, glove_dict)
+
+                    sentence_offsets = np.cumsum(sentence_len_valid)
+                    sentence_offsets_2 = np.insert(sentence_offsets, 0, 0, axis=0)
+                    sentence_offsets_3 = np.delete(sentence_offsets_2, sentence_offsets_2.shape[0] - 1)
+                    np_offsets_len = np.column_stack([sentence_offsets_3, sentence_offsets])
+
+
+                    confusion_matrix, valid_loss = \
+                        sess.run([confusion_matrix, loss], feed_dict={
+                            embedding_placeholder: weights_embed,
+                            inputs: qn_npy_valid,
+                            batch_sequence_lengths: qn_batch_len_valid,
+                            sentence_batch_len: sentence_len_valid,
+                            sentence_index_offsets: np_offsets_len,
+                            ground_truth_input: y_valid
+                        })
+
+                    if valid_conf_matrix is None:
+                        valid_conf_matrix = confusion_matrix
+                        validation_loss = valid_loss
+                    else:
+                        valid_conf_matrix += confusion_matrix
+                        validation_loss += valid_loss
+
+                print ('Validation Conf matrix')
+                print(valid_conf_matrix)
+                print ('Validation Loss')
+                print (validation_loss)
+
+
+
+
+
+
+
+
+
+
+
+
+
+            #print (out.shape)
+            #print(out[out.shape[0] - 1])
+            #print (t1.shape)
+            #print (t1[t1.shape[0] - 1])
+
+            #print(final_probs)
+            #print(logits)
 
 
             #assert embeds.shape[0] == cutoff_shape + 3
