@@ -350,7 +350,7 @@ def build_session(train_file, glove_file):
     mini_batch_size = 1000
     learning_rate = 0.001
 
-    validation_batch_size = 1000
+    #validation_batch_size = 1000
 
     train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
     valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
@@ -377,7 +377,7 @@ def build_session(train_file, glove_file):
 
     X_train, X_dev, glove_dict, weights_embed = get_train_df_glove_dict(train_file, glove_file)
 
-    valid_set_shape = X_dev.shape[0]
+    valid_set_shape = round(X_dev.shape[0],-3)
 
     with tf.Session(graph=gr) as sess:
 
@@ -456,9 +456,6 @@ def build_session(train_file, glove_file):
 
                 for j in range(0,valid_set_shape,mini_batch_size):
 
-                    if (j + validation_batch_size >= valid_set_shape):
-                        validation_batch_size = valid_set_shape - j - 1
-
                     valid_sample = X_dev[j:j+mini_batch_size]
                     y_valid = valid_sample.loc[:,'target']
 
@@ -470,7 +467,7 @@ def build_session(train_file, glove_file):
                     np_offsets_len = np.column_stack([sentence_offsets_3, sentence_offsets])
 
 
-                    confusion_matrix, valid_loss = \
+                    conf_matrix, valid_loss = \
                         sess.run([confusion_matrix, loss], feed_dict={
                             embedding_placeholder: weights_embed,
                             inputs: qn_npy_valid,
@@ -481,10 +478,10 @@ def build_session(train_file, glove_file):
                         })
 
                     if valid_conf_matrix is None:
-                        valid_conf_matrix = confusion_matrix
+                        valid_conf_matrix = conf_matrix
                         validation_loss = valid_loss
                     else:
-                        valid_conf_matrix += confusion_matrix
+                        valid_conf_matrix += conf_matrix
                         validation_loss += valid_loss
 
                 print ('Validation Conf matrix')
@@ -504,33 +501,6 @@ def build_session(train_file, glove_file):
                 acc_valid_summary = tf.Summary(
                     value=[tf.Summary.Value(tag="acc_train_summary", simple_value=float(true_pos / all_pos))])
                 valid_writer.add_summary(acc_valid_summary, i % 10)
-
-
-
-
-
-
-
-
-
-
-
-
-
-            #print (out.shape)
-            #print(out[out.shape[0] - 1])
-            #print (t1.shape)
-            #print (t1[t1.shape[0] - 1])
-
-            #print(final_probs)
-            #print(logits)
-
-
-            #assert embeds.shape[0] == cutoff_shape + 3
-            #assert embeds.shape[1] == glove_dim
-
-            #assert input_embd.shape[2] == glove_dim
-            #assert input_embd.shape[1] == max_sentence_len
 
 
 
