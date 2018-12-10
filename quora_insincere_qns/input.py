@@ -73,7 +73,7 @@ def get_train_df_glove_dict(train_file, glove_file):
     df = pd.read_csv(train_file,low_memory=False)
     y = df.loc[:,'target']
 
-    X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.1, stratify=y, random_state = 42)
+    X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.01, stratify=y, random_state = 42)
 
     glove_dict, weights = load_glove_vectors(glove_file)
 
@@ -350,7 +350,7 @@ def build_session(train_file, glove_file):
     mini_batch_size = 1000
     learning_rate = 0.001
 
-    validation_batch_size = 1000
+    #validation_batch_size = 1000
 
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
@@ -363,7 +363,7 @@ def build_session(train_file, glove_file):
 
     X_train, X_dev, glove_dict, weights_embed = get_train_df_glove_dict(train_file, glove_file)
 
-    valid_set_shape = X_dev.shape[0]
+    valid_set_shape = round(X_dev.shape[0],-3)
 
     for i in range(0,1):
 
@@ -408,15 +408,9 @@ def build_session(train_file, glove_file):
                 print ('Valid set shape')
                 print (valid_set_shape)
 
-                for j in range(0,valid_set_shape,validation_batch_size):
+                for j in range(0,valid_set_shape,mini_batch_size):
 
-                    print ('J is')
-                    print (j)
-
-                    if (j + validation_batch_size >= valid_set_shape):
-                        validation_batch_size = valid_set_shape - j - 1
-
-                    valid_sample = X_dev[j:j+validation_batch_size - 1]
+                    valid_sample = X_dev[j:j+mini_batch_size]
                     y_valid = valid_sample.loc[:,'target']
 
                     qn_npy_valid, qn_batch_len_valid, sentence_len_valid = process_questions(valid_sample, glove_dict)
@@ -427,7 +421,7 @@ def build_session(train_file, glove_file):
                     np_offsets_len = np.column_stack([sentence_offsets_3, sentence_offsets])
 
 
-                    confusion_matrix, valid_loss = \
+                    conf_matrix, valid_loss = \
                         sess.run([confusion_matrix, loss], feed_dict={
                             embedding_placeholder: weights_embed,
                             inputs: qn_npy_valid,
@@ -438,28 +432,16 @@ def build_session(train_file, glove_file):
                         })
 
                     if valid_conf_matrix is None:
-                        valid_conf_matrix = confusion_matrix
+                        valid_conf_matrix = conf_matrix
                         validation_loss = valid_loss
                     else:
-                        valid_conf_matrix += confusion_matrix
+                        valid_conf_matrix += conf_matrix
                         validation_loss += valid_loss
 
                 print ('Validation Conf matrix')
                 print(valid_conf_matrix)
                 print ('Validation Loss')
                 print (validation_loss)
-
-
-
-
-
-
-
-
-
-
-
-
 
             #print (out.shape)
             #print(out[out.shape[0] - 1])
@@ -468,7 +450,6 @@ def build_session(train_file, glove_file):
 
             #print(final_probs)
             #print(logits)
-
 
             #assert embeds.shape[0] == cutoff_shape + 3
             #assert embeds.shape[1] == glove_dim
