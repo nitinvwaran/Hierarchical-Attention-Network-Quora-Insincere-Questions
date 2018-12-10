@@ -4,7 +4,7 @@ import nltk
 #stop_words = set(stopwords.words('english'))
 
 import pandas as pd
-import re
+import re, os, shutil
 import numpy as np
 np.set_printoptions(threshold=np.nan)
 from sklearn.model_selection import train_test_split
@@ -73,7 +73,7 @@ def get_train_df_glove_dict(train_file, glove_file):
     df = pd.read_csv(train_file,low_memory=False)
     y = df.loc[:,'target']
 
-    X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.1, stratify=y, random_state = 42)
+    X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.01, stratify=y, random_state = 42)
 
     glove_dict, weights = load_glove_vectors(glove_file)
 
@@ -352,6 +352,20 @@ def build_session(train_file, glove_file):
 
     validation_batch_size = 1000
 
+    train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
+    valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
+
+    chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
+
+    if (os.path.exists(train_tensorboard_dir)):
+        shutil.rmtree(train_tensorboard_dir)
+    os.mkdir(train_tensorboard_dir)
+
+    if (os.path.exists(valid_tensorboard_dir)):
+        shutil.rmtree(valid_tensorboard_dir)
+    os.mkdir(valid_tensorboard_dir)
+
+
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits, embedding_placeholder, inputs, batch_sequence_lengths, sentence_batch_len,\
@@ -365,24 +379,33 @@ def build_session(train_file, glove_file):
 
     valid_set_shape = X_dev.shape[0]
 
-    for i in range(0,1):
+    with tf.Session(graph=gr) as sess:
 
-        # Sample mini batch of documents
-        train_sample = X_train.sample(n = mini_batch_size)
-        qn_npy, qn_batch_len,  sentence_len = process_questions(train_sample,glove_dict)
-        y_train = np.asarray(train_sample.loc[:,'target'])
+        sess.run(tf.global_variables_initializer())
+        saver = tf.train.Saver()
+
+        train_writer = tf.summary.FileWriter(train_tensorboard_dir, sess.graph)
+        valid_writer = tf.summary.FileWriter(valid_tensorboard_dir)
+
+        xent_counter = 0
+
+        for i in range(0,num_epochs):
+
+            # Sample mini batch of documents
+            train_sample = X_train.sample(n = mini_batch_size)
+            qn_npy, qn_batch_len,  sentence_len = process_questions(train_sample,glove_dict)
+            y_train = np.asarray(train_sample.loc[:,'target'])
 
 
-        # Create a matrix with each row as sentence offsets
-        # That gets used to rollup the flattened sentences into their documents
-        sentence_offsets = np.cumsum(sentence_len)
-        sentence_offsets_2 = np.insert(sentence_offsets,0,0,axis=0)
-        sentence_offsets_3 = np.delete(sentence_offsets_2,sentence_offsets_2.shape[0] - 1)
-        np_offsets_len = np.column_stack([sentence_offsets_3,sentence_offsets])
+            # Create a matrix with each row as sentence offsets
+            # That gets used to rollup the flattened sentences into their documents
+            sentence_offsets = np.cumsum(sentence_len)
+            sentence_offsets_2 = np.insert(sentence_offsets,0,0,axis=0)
+            sentence_offsets_3 = np.delete(sentence_offsets_2,sentence_offsets_2.shape[0] - 1)
+            np_offsets_len = np.column_stack([sentence_offsets_3,sentence_offsets])
 
-        with tf.Session(graph=gr) as sess:
 
-            sess.run(tf.global_variables_initializer())
+
             _, train_confusion_matrix, train_loss= \
                 sess.run([train_step,confusion_matrix, loss], feed_dict = {
                     embedding_placeholder: weights_embed,
@@ -399,6 +422,29 @@ def build_session(train_file, glove_file):
             print ('Train loss')
             print (train_loss)
 
+            true_pos = np.sum(np.diag(train_confusion_matrix))
+            all_pos = np.sum(train_confusion_matrix)
+            print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
+            print('Total data points:' + str(all_pos))
+
+            xent_counter += 1
+
+            loss_train_summary = tf.Summary(
+                value=[tf.Summary.Value(tag="acc_train_loss", simple_value=train_loss)])
+            train_writer.add_summary(loss_train_summary, xent_counter)
+
+            acc_train_summary = tf.Summary(
+                value=[tf.Summary.Value(tag="acc_train_summary", simple_value=float(true_pos / all_pos))])
+            train_writer.add_summary(acc_train_summary, xent_counter)
+
+            if (i % 10 == 0):
+
+                print('Saving checkpoint for epoch:' + str(i))
+                saver.save(sess=sess, save_path=chkpoint_dir + 'quora_insincere_qns.ckpt',
+                           global_step=i)
+
+
+
             # Validation machinery
             if (i % 10 == 0):
 
@@ -408,15 +454,12 @@ def build_session(train_file, glove_file):
                 print ('Valid set shape')
                 print (valid_set_shape)
 
-                for j in range(0,valid_set_shape,validation_batch_size):
-
-                    print ('J is')
-                    print (j)
+                for j in range(0,valid_set_shape,mini_batch_size):
 
                     if (j + validation_batch_size >= valid_set_shape):
                         validation_batch_size = valid_set_shape - j - 1
 
-                    valid_sample = X_dev[j:j+validation_batch_size - 1]
+                    valid_sample = X_dev[j:j+mini_batch_size]
                     y_valid = valid_sample.loc[:,'target']
 
                     qn_npy_valid, qn_batch_len_valid, sentence_len_valid = process_questions(valid_sample, glove_dict)
@@ -449,6 +492,19 @@ def build_session(train_file, glove_file):
                 print ('Validation Loss')
                 print (validation_loss)
 
+                true_pos = np.sum(np.diag(valid_conf_matrix))
+                all_pos = np.sum(valid_conf_matrix)
+                print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
+                print('Total data points:' + str(all_pos))
+
+                loss_valid_summary = tf.Summary(
+                    value=[tf.Summary.Value(tag="acc_train_loss", simple_value=validation_loss)])
+                valid_writer.add_summary(loss_valid_summary, i % 10)
+
+                acc_valid_summary = tf.Summary(
+                    value=[tf.Summary.Value(tag="acc_train_summary", simple_value=float(true_pos / all_pos))])
+                valid_writer.add_summary(acc_valid_summary, i % 10)
+
 
 
 
@@ -479,8 +535,8 @@ def build_session(train_file, glove_file):
 
 
 def main():
-    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
+    train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(glove_vectors_file)
