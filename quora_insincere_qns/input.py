@@ -417,6 +417,7 @@ def build_session(train_file, glove_file):
                     ground_truth_input : y_train
             })
 
+            print ('Epoch is:' + str(i))
             print ('Training Confusion Matrix')
             print (train_confusion_matrix)
             print ('Train loss')
