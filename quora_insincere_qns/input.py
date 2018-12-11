@@ -346,8 +346,8 @@ def build_loss_optimizer(logits):
 
 def build_session(train_file, glove_file):
 
-    num_epochs = 20
-    mini_batch_size = 1000
+    num_epochs = 20000
+    mini_batch_size = 128
     learning_rate = 0.001
 
     #validation_batch_size = 1000
@@ -379,7 +379,7 @@ def build_session(train_file, glove_file):
 
     valid_set_shape = round(X_dev.shape[0],-3)
 
-    with tf.Session(graph=gr) as sess:
+    with tf.Session(graph=gr,config=tf.ConfigProto(log_device_placement=True)) as sess:
 
         sess.run(tf.global_variables_initializer())
         saver = tf.train.Saver()
@@ -447,7 +447,7 @@ def build_session(train_file, glove_file):
 
 
             # Validation machinery
-            if (i % 10 == 0):
+            if (i % 20 == 0):
 
                 valid_conf_matrix = None
                 validation_loss = None
