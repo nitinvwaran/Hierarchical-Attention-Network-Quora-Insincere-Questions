@@ -87,6 +87,7 @@ def process_questions(qn_df, glove_dict):
     UNK = cutoff_shape + 1
     _NULL = cutoff_shape + 2
     sentence_batch_len = []
+    sentence_batch_len_2 = []
 
     #glove_dict, _ = load_glove_vectors(glove_file)
     #train_df = pd.read_csv(train_file, low_memory=False)
@@ -125,6 +126,7 @@ def process_questions(qn_df, glove_dict):
 
             qn_ls_word_idx.append(tmp)
             qn_batch_len.append(len(tmp))
+            sentence_batch_len_2.append(len(qn_ls))
 
     # Now we have max_len, a flattened sentence matrix, and batch sequence length for dynamic rnn.
     # Apply the _null padding.
@@ -141,7 +143,7 @@ def process_questions(qn_df, glove_dict):
 
     qn_npy = np.asarray(qn_ls_word_idx)
 
-    return qn_npy, qn_batch_len, sentence_batch_len # Flattened qn_lengths, and sentence_len at document level
+    return qn_npy, qn_batch_len, sentence_batch_len, sentence_batch_len_2 # Flattened qn_lengths, and sentence_len at document level
 
 
 def build_graph(max_sentence_len, mini_batch_size):
@@ -229,6 +231,8 @@ def build_graph(max_sentence_len, mini_batch_size):
         sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
         sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
 
+        sentence_batch_length_2 = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len_2")
+
         i = tf.constant(1)
 
         # A proud moment =)
@@ -241,18 +245,19 @@ def build_graph(max_sentence_len, mini_batch_size):
 
         def body(i,tf_padded_final):
 
-            #tf.print(i,[i])
-            end_idx = sentence_index_offsets[i,1]
-            st_idx = sentence_index_offsets[i,0]
-            tf_range = tf.range(start=st_idx,limit=end_idx)
-            pad_len = max_sent_seq_len - sentence_batch_len[i]
+            tf_mask = tf.equal(sentence_batch_length_2,i)
+            tf_slice = tf.boolean_mask(outputs,tf_mask,axis=0)
 
-            tf_slice = tf.gather(outputs,tf_range)
-            tf_slice_padding = [[0, pad_len], [0, 0]]
-            tf_slice_padded = tf.pad(tf_slice, tf_slice_padding, 'CONSTANT')
-            tf_slice_padded_3D = tf.expand_dims(tf_slice_padded, axis=0)
+            tf_slice_reshape = tf.reshape(tf_slice,shape=[-1,i,tf_slice.get_shape().as_list()[1]])
+            pad_len = max_sent_seq_len - i
 
-            tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
+
+            tf_slice_padding = [[0,0], [0, pad_len], [0, 0]]
+            tf_slice_padded = tf.pad(tf_slice_reshape, tf_slice_padding, 'CONSTANT')
+            #tf_slice_padded_3D = tf.expand_dims(tf_slice_padded, axis=0)
+            #tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
+
+            tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded],axis=0)
 
             i = tf.add(i,1)
 
@@ -344,7 +349,7 @@ def build_graph(max_sentence_len, mini_batch_size):
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
     return probs, logits, embedding_placeholder,inputs,batch_sequence_lengths, sentence_batch_len, \
-            sentence_index_offsets
+            sentence_index_offsets, tf_padded_final_2 , outputs, sentence_batch_length_2
 
 
 def build_loss_optimizer(logits):
@@ -404,7 +409,7 @@ def build_session(train_file, glove_file):
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits, embedding_placeholder, inputs, batch_sequence_lengths, sentence_batch_len,\
-         sentence_index_offsets = \
+         sentence_index_offsets, padded_2 , outs, sentence_batch_length_2 = \
             build_graph(max_seq_len,mini_batch_size)
 
         ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss \
@@ -428,7 +433,7 @@ def build_session(train_file, glove_file):
 
             # Sample mini batch of documents
             train_sample = X_train.sample(n = mini_batch_size)
-            qn_npy, qn_batch_len,  sentence_len = process_questions(train_sample,glove_dict)
+            qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2 = process_questions(train_sample,glove_dict)
             y_train = np.asarray(train_sample.loc[:,'target'])
 
 
@@ -441,16 +446,25 @@ def build_session(train_file, glove_file):
 
 
 
-            _, train_confusion_matrix, train_loss= \
-                sess.run([train_step,confusion_matrix, loss], feed_dict = {
+            _, train_confusion_matrix, train_loss, padd_2 , out= \
+                sess.run([train_step,confusion_matrix, loss, padded_2, outs], feed_dict = {
                     embedding_placeholder: weights_embed,
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
                     sentence_batch_len : sentence_len,
                     sentence_index_offsets : np_offsets_len,
                     learning_rate_input : learning_rate,
-                    ground_truth_input : y_train
+                    ground_truth_input : y_train,
+                    sentence_batch_length_2 : sentence_batch_train_2
             })
+
+            print ('Pad2')
+            print (padd_2.shape)
+            print (padd_2[0])
+            print (out[0])
+            print (len(sentence_batch_train_2))
+
+            print(sentence_batch_train_2)
 
             print ('Epoch is:' + str(i))
             print ('Training Confusion Matrix')
@@ -495,7 +509,7 @@ def build_session(train_file, glove_file):
                     valid_sample = X_dev[j:j+mini_batch_size]
                     y_valid = valid_sample.loc[:,'target']
 
-                    qn_npy_valid, qn_batch_len_valid, sentence_len_valid = process_questions(valid_sample, glove_dict)
+                    qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2 = process_questions(valid_sample, glove_dict)
 
                     sentence_offsets = np.cumsum(sentence_len_valid)
                     sentence_offsets_2 = np.insert(sentence_offsets, 0, 0, axis=0)
@@ -510,7 +524,8 @@ def build_session(train_file, glove_file):
                             batch_sequence_lengths: qn_batch_len_valid,
                             sentence_batch_len: sentence_len_valid,
                             sentence_index_offsets: np_offsets_len,
-                            ground_truth_input: y_valid
+                            ground_truth_input: y_valid,
+                            sentence_batch_length_2 : sentence_batch_valid_2
                         })
 
                     if valid_conf_matrix is None:
