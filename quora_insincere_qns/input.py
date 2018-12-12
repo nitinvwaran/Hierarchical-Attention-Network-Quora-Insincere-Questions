@@ -388,14 +388,14 @@ def build_session(train_file, glove_file):
 
     #validation_batch_size = 1000
 
-    #train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
-    #valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
+    train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
+    valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
 
-    train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
-    valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
+    #train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
+    #valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
 
 
-    chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
+    chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
 
     if (os.path.exists(train_tensorboard_dir)):
         shutil.rmtree(train_tensorboard_dir)
@@ -419,7 +419,7 @@ def build_session(train_file, glove_file):
 
     valid_set_shape = round(X_dev.shape[0],-3)
 
-    with tf.Session(graph=gr,config=tf.ConfigProto(log_device_placement=True)) as sess:
+    with tf.Session(graph=gr,config=tf.ConfigProto(log_device_placement=False)) as sess:
 
         sess.run(tf.global_variables_initializer())
         saver = tf.train.Saver()
@@ -458,13 +458,13 @@ def build_session(train_file, glove_file):
                     sentence_batch_length_2 : sentence_batch_train_2
             })
 
-            print ('Pad2')
-            print (padd_2.shape)
-            print (padd_2[0])
-            print (out[0])
-            print (len(sentence_batch_train_2))
+            #print ('Pad2')
+            #print (padd_2.shape)
+            #print (padd_2[0])
+            #print (out[0])
+            #print (len(sentence_batch_train_2))
 
-            print(sentence_batch_train_2)
+            #print(sentence_batch_train_2)
 
             print ('Epoch is:' + str(i))
             print ('Training Confusion Matrix')
@@ -504,36 +504,38 @@ def build_session(train_file, glove_file):
                 print ('Valid set shape')
                 print (valid_set_shape)
 
-                for j in range(0,valid_set_shape,mini_batch_size):
+                #for j in range(0,valid_set_shape,mini_batch_size):
 
-                    valid_sample = X_dev[j:j+mini_batch_size]
-                    y_valid = valid_sample.loc[:,'target']
+                    #valid_sample = X_dev[j:j+mini_batch_size]
+                    #y_valid = valid_sample.loc[:,'target']
 
-                    qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2 = process_questions(valid_sample, glove_dict)
+                y_valid = X_dev.loc[:, 'target']
 
-                    sentence_offsets = np.cumsum(sentence_len_valid)
-                    sentence_offsets_2 = np.insert(sentence_offsets, 0, 0, axis=0)
-                    sentence_offsets_3 = np.delete(sentence_offsets_2, sentence_offsets_2.shape[0] - 1)
-                    np_offsets_len = np.column_stack([sentence_offsets_3, sentence_offsets])
+                qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2 = process_questions(X_dev, glove_dict)
+
+                sentence_offsets = np.cumsum(sentence_len_valid)
+                sentence_offsets_2 = np.insert(sentence_offsets, 0, 0, axis=0)
+                sentence_offsets_3 = np.delete(sentence_offsets_2, sentence_offsets_2.shape[0] - 1)
+                np_offsets_len = np.column_stack([sentence_offsets_3, sentence_offsets])
 
 
-                    conf_matrix, valid_loss = \
-                        sess.run([confusion_matrix, loss], feed_dict={
-                            embedding_placeholder: weights_embed,
-                            inputs: qn_npy_valid,
-                            batch_sequence_lengths: qn_batch_len_valid,
-                            sentence_batch_len: sentence_len_valid,
-                            sentence_index_offsets: np_offsets_len,
-                            ground_truth_input: y_valid,
-                            sentence_batch_length_2 : sentence_batch_valid_2
-                        })
+                conf_matrix, valid_loss = \
+                    sess.run([confusion_matrix, loss], feed_dict={
+                        embedding_placeholder: weights_embed,
+                        inputs: qn_npy_valid,
+                        batch_sequence_lengths: qn_batch_len_valid,
+                        sentence_batch_len: sentence_len_valid,
+                        sentence_index_offsets: np_offsets_len,
+                        ground_truth_input: y_valid,
+                        sentence_batch_length_2 : sentence_batch_valid_2
+                    })
 
-                    if valid_conf_matrix is None:
-                        valid_conf_matrix = conf_matrix
-                        validation_loss = valid_loss
-                    else:
-                        valid_conf_matrix += conf_matrix
-                        validation_loss += valid_loss
+                if valid_conf_matrix is None:
+                    valid_conf_matrix = conf_matrix
+                    validation_loss = valid_loss
+                else:
+                    valid_conf_matrix += conf_matrix
+                    validation_loss += valid_loss
 
                 print ('Validation Conf matrix')
                 print(valid_conf_matrix)
@@ -547,22 +549,22 @@ def build_session(train_file, glove_file):
 
                 loss_valid_summary = tf.Summary(
                     value=[tf.Summary.Value(tag="acc_train_loss", simple_value=validation_loss)])
-                valid_writer.add_summary(loss_valid_summary, i % 10)
+                valid_writer.add_summary(loss_valid_summary, i % 20)
 
                 acc_valid_summary = tf.Summary(
                     value=[tf.Summary.Value(tag="acc_train_summary", simple_value=float(true_pos / all_pos))])
-                valid_writer.add_summary(acc_valid_summary, i % 10)
+                valid_writer.add_summary(acc_valid_summary, i % 20)
 
 
 
 def main():
-    #glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
-    #train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
-    #test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
-
-    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
+    train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
+
+    #glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
+    #train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    #test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(glove_vectors_file)
     #read_train_test_words(train_data,test_data,glove_vectors_file)
