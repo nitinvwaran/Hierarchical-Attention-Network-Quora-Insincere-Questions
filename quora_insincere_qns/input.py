@@ -229,12 +229,41 @@ def build_graph(max_sentence_len, mini_batch_size):
         sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
         sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
 
-        i = tf.constant(0)
+        i = tf.constant(1)
 
         # A proud moment =)
         # Used tensorflow conditionals for the first time!!
+
+        # going to try reshape  on individal sentence sizes
         def while_cond (i, tf_padded_final):
-            mb = tf.constant(mini_batch_size)
+            mb = tf.constant(max_sent_seq_len)
+            return tf.less_equal(i,mb)
+
+        def body(i,tf_padded_final):
+
+            #tf.print(i,[i])
+            end_idx = sentence_index_offsets[i,1]
+            st_idx = sentence_index_offsets[i,0]
+            tf_range = tf.range(start=st_idx,limit=end_idx)
+            pad_len = max_sent_seq_len - sentence_batch_len[i]
+
+            tf_slice = tf.gather(outputs,tf_range)
+            tf_slice_padding = [[0, pad_len], [0, 0]]
+            tf_slice_padded = tf.pad(tf_slice, tf_slice_padding, 'CONSTANT')
+            tf_slice_padded_3D = tf.expand_dims(tf_slice_padded, axis=0)
+
+            tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
+
+            i = tf.add(i,1)
+
+            return i, tf_padded_final
+
+
+
+        '''
+        # This is the old way
+        def while_cond (i, tf_padded_final):
+            mb = tf.constant(max_sent_seq_len)
             return tf.less(i,mb)
 
         def body(i,tf_padded_final):
@@ -255,6 +284,8 @@ def build_graph(max_sentence_len, mini_batch_size):
             i = tf.add(i,1)
 
             return i, tf_padded_final
+            
+        '''
 
         _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,20])])
 
@@ -352,10 +383,14 @@ def build_session(train_file, glove_file):
 
     #validation_batch_size = 1000
 
-    train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
-    valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
+    #train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
+    #valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
 
-    chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
+    train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
+    valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
+
+
+    chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
 
     if (os.path.exists(train_tensorboard_dir)):
         shutil.rmtree(train_tensorboard_dir)
@@ -505,8 +540,12 @@ def build_session(train_file, glove_file):
 
 
 def main():
-    glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
-    train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
+    #glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
+    #train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
+    #test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
+
+    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
+    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(glove_vectors_file)
