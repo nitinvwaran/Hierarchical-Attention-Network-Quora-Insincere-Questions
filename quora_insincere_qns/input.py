@@ -478,7 +478,7 @@ def build_session(train_file, glove_file):
             print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
             print('Total data points:' + str(all_pos))
 
-            train_auc = roc_auc_score(y_train,prob)
+            train_auc = roc_auc_score(y_train,prob,average="weighted")
             print ('Train AUC')
             print (train_auc)
 
@@ -555,7 +555,7 @@ def build_session(train_file, glove_file):
                 print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
                 print('Total data points:' + str(all_pos))
 
-                valid_auc = roc_auc_score(y_valid, valid_prob)
+                valid_auc = roc_auc_score(y_valid, valid_prob,average="weighted")
                 print('Valid AUC')
                 print(valid_auc)
 
