@@ -8,6 +8,7 @@ import re, os, shutil
 import numpy as np
 np.set_printoptions(threshold=np.nan)
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
 
 import tensorflow as tf
 
@@ -446,8 +447,8 @@ def build_session(train_file, glove_file):
 
 
 
-            _, train_confusion_matrix, train_loss, padd_2 , out= \
-                sess.run([train_step,confusion_matrix, loss, padded_2, outs], feed_dict = {
+            prob, _, train_confusion_matrix, train_loss, padd_2 , out= \
+                sess.run([final_probs,train_step,confusion_matrix, loss, padded_2, outs], feed_dict = {
                     embedding_placeholder: weights_embed,
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
@@ -477,23 +478,30 @@ def build_session(train_file, glove_file):
             print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
             print('Total data points:' + str(all_pos))
 
+            train_auc = roc_auc_score(y_train,prob)
+            print ('Train AUC')
+            print (train_auc)
+
+
             xent_counter += 1
 
             loss_train_summary = tf.Summary(
-                value=[tf.Summary.Value(tag="acc_train_loss", simple_value=train_loss)])
+                value=[tf.Summary.Value(tag="loss_train_summary", simple_value=train_loss)])
             train_writer.add_summary(loss_train_summary, xent_counter)
 
             acc_train_summary = tf.Summary(
                 value=[tf.Summary.Value(tag="acc_train_summary", simple_value=float(true_pos / all_pos))])
             train_writer.add_summary(acc_train_summary, xent_counter)
 
+            auc_train_summary = tf.Summary(
+                value=[tf.Summary.Value(tag="auc_train_summary", simple_value=train_auc)])
+            train_writer.add_summary(auc_train_summary, xent_counter)
+
             if (i % 10 == 0):
 
                 print('Saving checkpoint for epoch:' + str(i))
                 saver.save(sess=sess, save_path=chkpoint_dir + 'quora_insincere_qns.ckpt',
                            global_step=i)
-
-
 
             # Validation machinery
             if (i % 20 == 0):
@@ -519,8 +527,8 @@ def build_session(train_file, glove_file):
                 np_offsets_len = np.column_stack([sentence_offsets_3, sentence_offsets])
 
 
-                conf_matrix, valid_loss = \
-                    sess.run([confusion_matrix, loss], feed_dict={
+                valid_prob, conf_matrix, valid_loss = \
+                    sess.run([final_probs,confusion_matrix, loss], feed_dict={
                         embedding_placeholder: weights_embed,
                         inputs: qn_npy_valid,
                         batch_sequence_lengths: qn_batch_len_valid,
@@ -547,14 +555,21 @@ def build_session(train_file, glove_file):
                 print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
                 print('Total data points:' + str(all_pos))
 
+                valid_auc = roc_auc_score(y_valid, valid_prob)
+                print('Valid AUC')
+                print(valid_auc)
+
                 loss_valid_summary = tf.Summary(
-                    value=[tf.Summary.Value(tag="acc_train_loss", simple_value=validation_loss)])
+                    value=[tf.Summary.Value(tag="loss_valid_summary", simple_value=validation_loss)])
                 valid_writer.add_summary(loss_valid_summary, i % 20)
 
                 acc_valid_summary = tf.Summary(
-                    value=[tf.Summary.Value(tag="acc_train_summary", simple_value=float(true_pos / all_pos))])
+                    value=[tf.Summary.Value(tag="acc_valid_summary", simple_value=float(true_pos / all_pos))])
                 valid_writer.add_summary(acc_valid_summary, i % 20)
 
+                auc_valid_summary = tf.Summary(
+                    value=[tf.Summary.Value(tag="auc_valid_summary", simple_value=valid_auc)])
+                valid_writer.add_summary(auc_valid_summary, i % 20)
 
 
 def main():
