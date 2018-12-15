@@ -17,6 +17,8 @@ glove_dim = 300
 max_seq_len = 122
 max_sent_seq_len = 12 # 12 sentences in a doc
 
+reload_mmap = False
+
 
 '''
 def load_npy_file(npy_file):
@@ -41,7 +43,7 @@ def get_max_len(train_file):
 '''
 
 
-def load_glove_vectors(memmap_loc, glove_file):
+def load_glove_vectors(memmap_loc, glove_file, reload_mmap = False):
 
     """
     Create a memmap
@@ -54,7 +56,7 @@ def load_glove_vectors(memmap_loc, glove_file):
 
     mmap = None
 
-    if (not os.path.isfile(memmap_loc)):
+    if (reload_mmap):
         mmap = np.memmap(memmap_loc, dtype='float32', mode='w+', shape=(cutoff_shape + 2, glove_dim))
 
     with open (glove_file,'r') as f:
@@ -66,7 +68,7 @@ def load_glove_vectors(memmap_loc, glove_file):
             glove_dict[str(l[0]).strip().lower()] = index
 
             # Add to memmap
-            if (not os.path.isfile(memmap_loc)):
+            if (reload_mmap):
                 del l[0]
                 mmap[index,:] = l
 
@@ -78,7 +80,7 @@ def load_glove_vectors(memmap_loc, glove_file):
 
     # contains the word embeddings. assumes indexes start from 0-based in the txt file
 
-    if (not os.path.isfile(memmap_loc)):
+    if (reload_mmap):
         # Add the UNK
         unk_wt = np.random.randn(glove_dim)
         #wts.append(unk_wt.tolist())
@@ -101,13 +103,14 @@ def load_glove_vectors(memmap_loc, glove_file):
 
 def get_train_df_glove_dict(train_file, glove_file,mmap_loc):
 
+
     df = pd.read_csv(train_file,low_memory=False)
     y = df.loc[:,'target']
 
     X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.01, stratify=y, random_state = 42)
 
     # creates the mmap
-    glove_dict = load_glove_vectors(mmap_loc,glove_file)
+    glove_dict = load_glove_vectors(mmap_loc,glove_file,reload_mmap)
 
     return X_train, X_dev, glove_dict
 
@@ -189,7 +192,7 @@ def process_questions(qn_df, glove_dict, mmap):
         qn_ls_word_embd[l] = tmp_npy
 
         l += 1
-        print ('Concat ' + str(l))
+
 
     #max_l = -1
     #for item in sentence_batch_len:
@@ -199,7 +202,7 @@ def process_questions(qn_df, glove_dict, mmap):
     #print (max_l)
 
     #qn_npy = np.asarray(qn_ls_word_idx)
-    print ('Concat done')
+
 
     return qn_ls_word_embd, qn_batch_len, sentence_batch_len, sentence_batch_len_2 # Flattened qn_lengths, and sentence_len at document level
 
@@ -222,11 +225,11 @@ def build_graph(max_sentence_len):
         return res_T
 
 
-    gru_units = 10
-    output_size = 10
+    gru_units = 50
+    output_size = 50
 
-    gru_units_sent = 10
-    output_size_sent = 10
+    gru_units_sent = 50
+    output_size_sent = 50
 
     cell_fw = tf.nn.rnn_cell.GRUCell(gru_units)
     cell_bw = tf.nn.rnn_cell.GRUCell(gru_units)
@@ -350,7 +353,7 @@ def build_graph(max_sentence_len):
             
         '''
 
-        _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,20])])
+        _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,output_size_sent * 2])])
 
 
     # Give it a haircut
@@ -446,15 +449,15 @@ def build_session(train_file, glove_file,mmap_loc):
 
     #validation_batch_size = 1000
 
-    #train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
-    #valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
+    train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
+    valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
 
-    train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
-    valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
+    #train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
+    #valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
 
 
-    #chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
-    chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
+    chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
+    #chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
 
     if (os.path.exists(train_tensorboard_dir)):
         shutil.rmtree(train_tensorboard_dir)
@@ -619,26 +622,27 @@ def build_session(train_file, glove_file,mmap_loc):
 
                 loss_valid_summary = tf.Summary(
                     value=[tf.Summary.Value(tag="loss_valid_summary", simple_value=validation_loss)])
-                valid_writer.add_summary(loss_valid_summary, i % 20)
+                valid_writer.add_summary(loss_valid_summary, i / 20)
 
                 acc_valid_summary = tf.Summary(
                     value=[tf.Summary.Value(tag="acc_valid_summary", simple_value=float(true_pos / all_pos))])
-                valid_writer.add_summary(acc_valid_summary, i % 20)
+                valid_writer.add_summary(acc_valid_summary, i / 20)
 
                 auc_valid_summary = tf.Summary(
                     value=[tf.Summary.Value(tag="auc_valid_summary", simple_value=valid_auc)])
-                valid_writer.add_summary(auc_valid_summary, i % 20)
+                valid_writer.add_summary(auc_valid_summary, i / 20)
 
 
 def main():
-    #glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
-    #train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
+    glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
+    train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
-    memmap_loc = '/home/nitin/Desktop/kaggle_data/all/memmap_file_embeddings.npy'
+    #memmap_loc = '/home/nitin/Desktop/kaggle_data/all/memmap_file_embeddings.npy'
+    memmap_loc = '/home/ubuntu/Desktop/k_contest/all/memmap_file_embeddings.npy'
 
-    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    #glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
+    #train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(memmap_loc,glove_file)
