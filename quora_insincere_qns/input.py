@@ -1,7 +1,7 @@
 import nltk
-#nltk.download('stopwords')
-#from nltk.corpus import stopwords
-#stop_words = set(stopwords.words('english'))
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+stop_words = set(stopwords.words('english'))
 
 import pandas as pd
 import re, os, shutil
@@ -147,7 +147,7 @@ def process_questions(qn_df, glove_dict, mmap):
         qn3 = [x for y in qn2 for x in y if x != '']
         #print (qn3)
         qn_ls = [re.sub('[^A-Za-z0-9 ]+', '', q) for q in qn3]
-        qn_ls = [x.lower() for x in qn_ls]  # if x not in stop_words]
+        qn_ls = [x.lower() for x in qn_ls if x not in stop_words]
 
         sentence_batch_len.append(len(qn_ls))
 
@@ -430,7 +430,10 @@ def build_loss_optimizer(logits):
 
         #extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)  # For batch normalization ops update
         #with tf.control_dependencies(extra_update_ops):
-        train_step = tf.train.AdamOptimizer(
+        #train_step = tf.train.AdamOptimizer(
+        #    learning_rate_input).minimize(loss)
+
+        train_step = tf.train.GradientDescentOptimizer(
             learning_rate_input).minimize(loss)
 
         #predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
@@ -443,9 +446,9 @@ def build_loss_optimizer(logits):
 
 def build_session(train_file, glove_file,mmap_loc):
 
-    num_epochs = 20000
+    num_epochs = 200000
     mini_batch_size = 128
-    learning_rate = 0.001
+    learning_rate = 0.01
 
     #validation_batch_size = 1000
 
