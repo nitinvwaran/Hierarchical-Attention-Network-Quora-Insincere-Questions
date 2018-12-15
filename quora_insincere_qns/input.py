@@ -15,6 +15,7 @@ import tensorflow as tf
 cutoff_shape = 2196017
 glove_dim = 300
 max_seq_len = 122
+cutoff_seq = 70
 max_sent_seq_len = 12 # 12 sentences in a doc
 
 reload_mmap = False
@@ -112,7 +113,24 @@ def get_train_df_glove_dict(train_file, glove_file,mmap_loc):
     # creates the mmap
     glove_dict = load_glove_vectors(mmap_loc,glove_file,reload_mmap)
 
-    return X_train, X_dev, glove_dict
+    X_train_0 = X_train.loc[X_train['target'] == 0]
+    X_train_1 = X_train.loc[X_train['target'] == 1]
+
+    X_train_0_sample = X_train_0.sample(n=500)
+    X_train_1_sample = X_train_1.sample(n=50)
+
+    X_dev_0 = X_dev.loc[X_dev['target'] == 0]
+    X_dev_1 = X_dev.loc[X_dev['target'] == 1]
+
+    X_dev_0_sample = X_dev_0.sample(n=100)
+    X_dev_1_sample = X_dev_1.sample(n=20)
+
+    X_train_f = pd.concat([X_train_0_sample,X_train_1_sample],axis=0)
+    X_dev_f = pd.concat([X_dev_0_sample, X_dev_1_sample], axis=0)
+
+    #return X_train, X_dev, glove_dict
+
+    return X_train_f, X_dev_f, glove_dict
 
 
 
@@ -181,12 +199,18 @@ def process_questions(qn_df, glove_dict, mmap):
     # Apply the _null padding.
 
     batch_shape = len(qn_ls_word_idx)
-    qn_ls_word_embd = np.empty((batch_shape, max_seq_len, glove_dim))
+    #qn_ls_word_embd = np.empty((batch_shape, max_seq_len, glove_dim))
+    qn_ls_word_embd = np.empty((batch_shape, cutoff_seq, glove_dim))
 
     for item in qn_ls_word_idx:
         item += [_NULL] * (max_seq_len - len(item))
+
+        # Apply a cutoff
+        item = item[:cutoff_seq]
+
         # Word embedding lookup from memmapped file
-        tmp_npy = mmap[item]
+        tmp_npy = mmap[[item]]
+
         tmp_npy = np.expand_dims(tmp_npy,axis=0)
 
         qn_ls_word_embd[l] = tmp_npy
@@ -225,17 +249,17 @@ def build_graph(max_sentence_len):
         return res_T
 
 
-    gru_units = 50
-    output_size = 50
+    gru_units = 100
+    output_size = 100
 
-    gru_units_sent = 50
-    output_size_sent = 50
+    gru_units_sent = 100
+    output_size_sent = 100
 
-    cell_fw = tf.nn.rnn_cell.GRUCell(gru_units)
-    cell_bw = tf.nn.rnn_cell.GRUCell(gru_units)
+    cell_fw = tf.nn.rnn_cell.LSTMCell(gru_units)
+    cell_bw = tf.nn.rnn_cell.LSTMCell(gru_units)
 
-    cell_sent_fw = tf.nn.rnn_cell.GRUCell(gru_units_sent)
-    cell_sent_bw = tf.nn.rnn_cell.GRUCell(gru_units_sent)
+    cell_sent_fw = tf.nn.rnn_cell.LSTMCell(gru_units_sent)
+    cell_sent_bw = tf.nn.rnn_cell.LSTMCell(gru_units_sent)
 
     # First fetch the pre-trained word embeddings into variable
     # + 2 because of the UNK weight and the 0-index start
@@ -269,12 +293,12 @@ def build_graph(max_sentence_len):
 
         # Big brain #1
         attention_context_vector = tf.get_variable(name='attention_context_vector',
-                                                   shape=[output_size],
+                                                   shape=[output_size * 2],
                                                    initializer=initializer,
                                                    dtype=tf.float32)
 
-        input_projection = tf.contrib.layers.fully_connected(outputs_hidden, output_size,
-                                                  activation_fn=tf.nn.tanh)
+        input_projection = tf.contrib.layers.fully_connected(outputs_hidden, output_size * 2,
+                                                  activation_fn=tf.nn.relu)
         vector_attn = tf.tensordot(input_projection,attention_context_vector,axes=[[2],[0]],name="vector_attn")
         attn_softmax = tf.map_fn(lambda batch:
                                sparse_softmax(batch)
@@ -378,12 +402,12 @@ def build_graph(max_sentence_len):
 
         # Big brain #2 (or is this Pinky..?)
         attention_context_vector_sent = tf.get_variable(name='attention_context_vector_sent',
-                                                   shape=[output_size_sent],
+                                                   shape=[output_size_sent * 2],
                                                    initializer=initializer_sent,
                                                    dtype=tf.float32)
 
-        input_projection_sent = tf.contrib.layers.fully_connected(outputs_hidden_sent, output_size_sent,
-                                                             activation_fn=tf.nn.tanh)
+        input_projection_sent = tf.contrib.layers.fully_connected(outputs_hidden_sent, output_size_sent * 2,
+                                                             activation_fn=tf.nn.relu)
         vector_attn_sent = tf.tensordot(input_projection_sent, attention_context_vector_sent, axes=[[2], [0]], name="vector_attn_sent")
         attn_softmax_sent = tf.map_fn(lambda batch:
                                  sparse_softmax(batch)
@@ -410,7 +434,7 @@ def build_graph(max_sentence_len):
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
     return probs, logits, inputs,batch_sequence_lengths, sentence_batch_len, \
-            sentence_index_offsets, tf_padded_final_2 , outputs, sentence_batch_length_2
+            sentence_index_offsets,  sentence_batch_length_2
 
 
 def build_loss_optimizer(logits):
@@ -430,11 +454,14 @@ def build_loss_optimizer(logits):
 
         #extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)  # For batch normalization ops update
         #with tf.control_dependencies(extra_update_ops):
-        #train_step = tf.train.AdamOptimizer(
+        train_step = tf.train.AdamOptimizer(
+            learning_rate_input).minimize(loss)
+
+        #train_step = tf.train.GradientDescentOptimizer(
         #    learning_rate_input).minimize(loss)
 
-        train_step = tf.train.GradientDescentOptimizer(
-            learning_rate_input).minimize(loss)
+        #train_step = tf.train.AdagradOptimizer(
+        #    learning_rate_input).minimize(loss)
 
         #predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
         predicted_indices = tf.to_int32(tf.greater_equal(logits,0.5))
@@ -442,6 +469,7 @@ def build_loss_optimizer(logits):
             ground_truth_input, predicted_indices, num_classes=2, name="confusion_matrix")
 
     return ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss
+
 
 
 def build_session(train_file, glove_file,mmap_loc):
@@ -452,15 +480,15 @@ def build_session(train_file, glove_file,mmap_loc):
 
     #validation_batch_size = 1000
 
-    train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
-    valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
+    #train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
+    #valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
 
-    #train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
-    #valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
+    train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
+    valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
 
 
-    chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
-    #chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
+    #chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
+    chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
 
     if (os.path.exists(train_tensorboard_dir)):
         shutil.rmtree(train_tensorboard_dir)
@@ -474,13 +502,16 @@ def build_session(train_file, glove_file,mmap_loc):
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits,  inputs, batch_sequence_lengths, sentence_batch_len,\
-         sentence_index_offsets, padded_2 , outs, sentence_batch_length_2 = \
-            build_graph(max_seq_len)
+         sentence_index_offsets, sentence_batch_length_2 = \
+            build_graph(cutoff_seq)
 
         ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss \
             = build_loss_optimizer(logits=logits)
 
     X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc)
+
+    print ('X_ men shape')
+    print (X_train.shape)
 
     valid_set_shape = X_dev.shape[0]
     # Open the read mmap
@@ -499,7 +530,8 @@ def build_session(train_file, glove_file,mmap_loc):
         for i in range(0,num_epochs):
 
             # Sample mini batch of documents
-            train_sample = X_train.sample(n = mini_batch_size)
+            #train_sample = X_train.sample(n = mini_batch_size)
+            train_sample = X_train
             qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2 = process_questions(train_sample,glove_dict,mmap)
             y_train = np.asarray(train_sample.loc[:,'target'])
 
@@ -513,8 +545,8 @@ def build_session(train_file, glove_file,mmap_loc):
 
 
 
-            prob, _, train_confusion_matrix, train_loss, padd_2 , out= \
-                sess.run([final_probs,train_step,confusion_matrix, loss, padded_2, outs], feed_dict = {
+            prob, _, train_confusion_matrix, train_loss = \
+                sess.run([final_probs,train_step,confusion_matrix, loss], feed_dict = {
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
                     sentence_batch_len : sentence_len,
@@ -641,11 +673,11 @@ def main():
     train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
-    #memmap_loc = '/home/nitin/Desktop/kaggle_data/all/memmap_file_embeddings.npy'
-    memmap_loc = '/home/ubuntu/Desktop/k_contest/all/memmap_file_embeddings.npy'
+    memmap_loc = '/home/nitin/Desktop/kaggle_data/all/memmap_file_embeddings.npy'
+    #memmap_loc = '/home/ubuntu/Desktop/k_contest/all/memmap_file_embeddings.npy'
 
-    #glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    #train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
+    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
     #load_glove_vectors(memmap_loc,glove_file)
