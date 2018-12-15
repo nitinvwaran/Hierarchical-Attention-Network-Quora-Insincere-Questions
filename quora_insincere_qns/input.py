@@ -12,10 +12,18 @@ from sklearn.metrics import roc_auc_score
 
 import tensorflow as tf
 
-cutoff_shape = 199999
+cutoff_shape = 2196017
 glove_dim = 300
 max_seq_len = 122
 max_sent_seq_len = 12 # 12 sentences in a doc
+
+
+'''
+def load_npy_file(npy_file):
+
+    mmap = np.memmap(npy_file, dtype='float32', mode='r', shape=(cutoff_shape + 2, glove_dim))
+
+    print (mmap[[0,2196015,2196017,2196018]].shape)
 
 
 def get_max_len(train_file):
@@ -30,14 +38,24 @@ def get_max_len(train_file):
 
     print ('Max is:')
     print (max)
+'''
 
 
-def load_glove_vectors(glove_file):
+def load_glove_vectors(memmap_loc, glove_file):
 
-    wts = []
+    """
+    Create a memmap
+    """
+
+    #wts = []
     glove_dict = {}
 
     i = 0
+
+    mmap = None
+
+    if (not os.path.isfile(memmap_loc)):
+        mmap = np.memmap(memmap_loc, dtype='float32', mode='w+', shape=(cutoff_shape + 2, glove_dim))
 
     with open (glove_file,'r') as f:
 
@@ -46,47 +64,60 @@ def load_glove_vectors(glove_file):
 
             #add to the dictionary
             glove_dict[str(l[0]).strip().lower()] = index
-            del l[0]
-            wts.append(l)
+
+            # Add to memmap
+            if (not os.path.isfile(memmap_loc)):
+                del l[0]
+                mmap[index,:] = l
+
+            #wts.append(l)
             i += 1
-            if (i > cutoff_shape): # for dev purposes only
-                break
+            #if (i > cutoff_shape): # for dev purposes only
+            #    break
 
 
     # contains the word embeddings. assumes indexes start from 0-based in the txt file
-    # Add the UNK
-    unk_wt = np.random.randn(glove_dim)
-    wts.append(unk_wt.tolist())
-    # Add the _NULL
-    null_wt = np.zeros(glove_dim)
-    wts.append(null_wt.tolist())
 
-    weights = np.asarray(wts)
+    if (not os.path.isfile(memmap_loc)):
+        # Add the UNK
+        unk_wt = np.random.randn(glove_dim)
+        #wts.append(unk_wt.tolist())
+        mmap[i:] = unk_wt
+        i += 1
 
-    assert weights.shape[1] == glove_dim
-    assert weights.shape[0] == cutoff_shape + 3
+        # Add the _NULL
+        null_wt = np.zeros(glove_dim)
+        #wts.append(null_wt.tolist())
+        mmap[i:] = null_wt
+        mmap.flush()
 
-    return glove_dict, weights
+    #weights = np.asarray(wts)
+
+    #assert weights.shape[1] == glove_dim
+    #assert weights.shape[0] == cutoff_shape + 3
+
+    return glove_dict
 
 
-def get_train_df_glove_dict(train_file, glove_file):
+def get_train_df_glove_dict(train_file, glove_file,mmap_loc):
 
     df = pd.read_csv(train_file,low_memory=False)
     y = df.loc[:,'target']
 
     X_train, X_dev, y_train, y_dev = train_test_split(df, y, test_size=0.01, stratify=y, random_state = 42)
 
-    glove_dict, weights = load_glove_vectors(glove_file)
+    # creates the mmap
+    glove_dict = load_glove_vectors(mmap_loc,glove_file)
 
-    return X_train, X_dev, glove_dict, weights
+    return X_train, X_dev, glove_dict
 
 
 
-def process_questions(qn_df, glove_dict):
+def process_questions(qn_df, glove_dict, mmap):
 
     #UNK = 2196017
-    UNK = cutoff_shape + 1
-    _NULL = cutoff_shape + 2
+    UNK = cutoff_shape
+    _NULL = cutoff_shape + 1
     sentence_batch_len = []
     sentence_batch_len_2 = []
 
@@ -95,10 +126,12 @@ def process_questions(qn_df, glove_dict):
     #test_df = pd.read_csv(test_file, low_memory=False)
     #train_qns = train_df.iloc[:,1]
 
+
     qn_ls_word_idx = []
     qn_batch_len = []
     #max_sentence_len = -1
 
+    l = 0
     for index, item in qn_df.iterrows():
 
         #if (index > 1000): # dev purposes only
@@ -115,25 +148,48 @@ def process_questions(qn_df, glove_dict):
 
         sentence_batch_len.append(len(qn_ls))
 
+
         # word level tokens
         qn_ls_word = [x.split(' ') for x in qn_ls]
         #print (qn_ls_word)
 
+        # Bit misnomer. qn_ls_word is still array of sentences in each document / answer
+
         for y in qn_ls_word:
+
             tmp = [glove_dict[x] if (x in glove_dict.keys()) else UNK for x in y]
+            #word_batch_len = len(tmp)
+            #tmp += [_NULL] * (max_seq_len - len(tmp)) # pad to the max_seq_len
 
             #if (len(tmp) > max_sentence_len):
             #    max_sentence_len = len(tmp)
 
+            # Word embedding lookup from memmapped file
+            #tmp_npy = mmap[tmp]
+            #tmp_npy = np.expand_dims(tmp_npy,axis=0)
             qn_ls_word_idx.append(tmp)
+
+
+
             qn_batch_len.append(len(tmp))
             sentence_batch_len_2.append(len(qn_ls))
 
     # Now we have max_len, a flattened sentence matrix, and batch sequence length for dynamic rnn.
     # Apply the _null padding.
+
+    batch_shape = len(qn_ls_word_idx)
+    qn_ls_word_embd = np.empty((batch_shape, max_seq_len, glove_dim))
+
     for item in qn_ls_word_idx:
         item += [_NULL] * (max_seq_len - len(item))
+        # Word embedding lookup from memmapped file
+        tmp_npy = mmap[item]
+        tmp_npy = np.expand_dims(tmp_npy,axis=0)
 
+        qn_ls_word_embd[l] = tmp_npy
+
+        l += 1
+        print ('Concat ' + str(l))
 
     #max_l = -1
     #for item in sentence_batch_len:
@@ -142,12 +198,13 @@ def process_questions(qn_df, glove_dict):
     #print ('The max sentence batch')
     #print (max_l)
 
-    qn_npy = np.asarray(qn_ls_word_idx)
+    #qn_npy = np.asarray(qn_ls_word_idx)
+    print ('Concat done')
 
-    return qn_npy, qn_batch_len, sentence_batch_len, sentence_batch_len_2 # Flattened qn_lengths, and sentence_len at document level
+    return qn_ls_word_embd, qn_batch_len, sentence_batch_len, sentence_batch_len_2 # Flattened qn_lengths, and sentence_len at document level
 
 
-def build_graph(max_sentence_len, mini_batch_size):
+def build_graph(max_sentence_len):
 
     def sparse_softmax(T):
 
@@ -179,15 +236,15 @@ def build_graph(max_sentence_len, mini_batch_size):
 
     # First fetch the pre-trained word embeddings into variable
     # + 2 because of the UNK weight and the 0-index start
-    with tf.variable_scope("embedding_layer"):
-        embedding_const = tf.Variable(tf.constant(0.0,dtype=tf.float32,shape=[cutoff_shape + 3, glove_dim]),trainable=False,name="embedding_const")
-        embedding_placeholder = tf.placeholder(dtype=tf.float32,shape=[cutoff_shape + 3,glove_dim],name="embedding_placeholder")
-        embedding_init = embedding_const.assign(embedding_placeholder)
+    #with tf.variable_scope("embedding_layer"):
+        #embedding_const = tf.Variable(tf.constant(0.0,dtype=tf.float32,shape=[cutoff_shape + 3, glove_dim]),trainable=False,name="embedding_const")
+        #embedding_placeholder = tf.placeholder(dtype=tf.float32,shape=[cutoff_shape + 3,glove_dim],name="embedding_placeholder")
+        #embedding_init = embedding_const.assign(embedding_placeholder)
 
     # Now load the inputs and convert them to word vectors
     with tf.variable_scope("layer_inputs"):
-        inputs = tf.placeholder(dtype=tf.int32, shape=[None,max_sentence_len],name="input")
-        inputs_embed = tf.nn.embedding_lookup(embedding_init,inputs,name="input_embed")
+        inputs = tf.placeholder(dtype=tf.float32, shape=[None,max_sentence_len,glove_dim],name="input")
+        #inputs_embed = tf.nn.embedding_lookup(embedding_init,inputs,name="input_embed")
         batch_sequence_lengths = tf.placeholder(dtype=tf.int32,name="sequence_length")
 
 
@@ -196,7 +253,7 @@ def build_graph(max_sentence_len, mini_batch_size):
          _) = (
             tf.nn.bidirectional_dynamic_rnn(cell_fw=cell_fw,
                                             cell_bw=cell_bw,
-                                            inputs=inputs_embed,
+                                            inputs=inputs,
                                             sequence_length=batch_sequence_lengths,
                                             dtype=tf.float32,
                                             swap_memory=True,
@@ -349,7 +406,7 @@ def build_graph(max_sentence_len, mini_batch_size):
     #       vector_attn, attn_softmax, \
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
-    return probs, logits, embedding_placeholder,inputs,batch_sequence_lengths, sentence_batch_len, \
+    return probs, logits, inputs,batch_sequence_lengths, sentence_batch_len, \
             sentence_index_offsets, tf_padded_final_2 , outputs, sentence_batch_length_2
 
 
@@ -381,7 +438,7 @@ def build_loss_optimizer(logits):
     return ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss
 
 
-def build_session(train_file, glove_file):
+def build_session(train_file, glove_file,mmap_loc):
 
     num_epochs = 20000
     mini_batch_size = 128
@@ -389,14 +446,15 @@ def build_session(train_file, glove_file):
 
     #validation_batch_size = 1000
 
-    train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
-    valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
+    #train_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/train/'
+    #valid_tensorboard_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/valid/'
 
-    #train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
-    #valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
+    train_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/train/'
+    valid_tensorboard_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/valid/'
 
 
-    chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
+    #chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
+    chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
 
     if (os.path.exists(train_tensorboard_dir)):
         shutil.rmtree(train_tensorboard_dir)
@@ -409,16 +467,18 @@ def build_session(train_file, glove_file):
 
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
-        final_probs, logits, embedding_placeholder, inputs, batch_sequence_lengths, sentence_batch_len,\
+        final_probs, logits,  inputs, batch_sequence_lengths, sentence_batch_len,\
          sentence_index_offsets, padded_2 , outs, sentence_batch_length_2 = \
-            build_graph(max_seq_len,mini_batch_size)
+            build_graph(max_seq_len)
 
         ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss \
             = build_loss_optimizer(logits=logits)
 
-    X_train, X_dev, glove_dict, weights_embed = get_train_df_glove_dict(train_file, glove_file)
+    X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc)
 
-    valid_set_shape = round(X_dev.shape[0],-3)
+    valid_set_shape = X_dev.shape[0]
+    # Open the read mmap
+    mmap = np.memmap(mmap_loc, dtype='float32', mode='r', shape=(cutoff_shape + 2, glove_dim))
 
     with tf.Session(graph=gr,config=tf.ConfigProto(log_device_placement=False)) as sess:
 
@@ -434,7 +494,7 @@ def build_session(train_file, glove_file):
 
             # Sample mini batch of documents
             train_sample = X_train.sample(n = mini_batch_size)
-            qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2 = process_questions(train_sample,glove_dict)
+            qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2 = process_questions(train_sample,glove_dict,mmap)
             y_train = np.asarray(train_sample.loc[:,'target'])
 
 
@@ -449,7 +509,6 @@ def build_session(train_file, glove_file):
 
             prob, _, train_confusion_matrix, train_loss, padd_2 , out= \
                 sess.run([final_probs,train_step,confusion_matrix, loss, padded_2, outs], feed_dict = {
-                    embedding_placeholder: weights_embed,
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
                     sentence_batch_len : sentence_len,
@@ -519,7 +578,7 @@ def build_session(train_file, glove_file):
 
                 y_valid = X_dev.loc[:, 'target']
 
-                qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2 = process_questions(X_dev, glove_dict)
+                qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2 = process_questions(X_dev, glove_dict,mmap)
 
                 sentence_offsets = np.cumsum(sentence_len_valid)
                 sentence_offsets_2 = np.insert(sentence_offsets, 0, 0, axis=0)
@@ -529,7 +588,6 @@ def build_session(train_file, glove_file):
 
                 valid_prob, conf_matrix, valid_loss = \
                     sess.run([final_probs,confusion_matrix, loss], feed_dict={
-                        embedding_placeholder: weights_embed,
                         inputs: qn_npy_valid,
                         batch_sequence_lengths: qn_batch_len_valid,
                         sentence_batch_len: sentence_len_valid,
@@ -573,19 +631,22 @@ def build_session(train_file, glove_file):
 
 
 def main():
-    glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
-    train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
+    #glove_file = '/home/ubuntu/Desktop/k_contest/all/glove.840B.300d.txt'
+    #train_file = '/home/ubuntu/Desktop/k_contest/all/train.csv'
     test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
 
-    #glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
-    #train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
-    #test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
+    memmap_loc = '/home/nitin/Desktop/kaggle_data/all/memmap_file_embeddings.npy'
 
-    #load_glove_vectors(glove_vectors_file)
+    glove_file = '/home/nitin/Desktop/kaggle_data/all/embeddings/glove.840B.300d/glove.840B.300d.txt'
+    train_file = '/home/nitin/Desktop/kaggle_data/all/train.csv'
+    test_data = '/home/nitin/Desktop/kaggle_data/all/test.csv'
+
+    #load_glove_vectors(memmap_loc,glove_file)
+
     #read_train_test_words(train_data,test_data,glove_vectors_file)
 
-    #build_session(glove_vectors_file)
-    build_session(train_file,glove_file)
+    build_session(train_file,glove_file,memmap_loc)
+    #build_session(train_file,glove_file)
     #sampling(train_data)
 
     #glove_dict, wt = load_glove_vectors(glove_vectors_file)
