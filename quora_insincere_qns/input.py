@@ -9,15 +9,16 @@ import numpy as np
 np.set_printoptions(threshold=np.nan)
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
+from sklearn.utils import shuffle
 
 import tensorflow as tf
 
 cutoff_shape = 2196017
 glove_dim = 300
 max_seq_len = 122
-cutoff_seq = 50
+cutoff_seq = 20
 max_sent_seq_len = 12 # 12 sentences in a doc
-sent_cutoff_seq = 5
+sent_cutoff_seq = 2
 
 reload_mmap = False
 
@@ -124,7 +125,7 @@ def get_train_df_glove_dict(train_file, glove_file,mmap_loc):
     X_dev_1 = X_dev.loc[X_dev['target'] == 1]
 
     X_dev_0_sample = X_dev_0.sample(n=10000)
-    X_dev_1_sample = X_dev_1.sample(n=200)
+    X_dev_1_sample = X_dev_1.sample(n=300)
 
     X_train_f = pd.concat([X_train_0_sample,X_train_1_sample],axis=0)
     X_dev_f = pd.concat([X_dev_0_sample, X_dev_1_sample], axis=0)
@@ -142,6 +143,7 @@ def process_questions(qn_df, glove_dict, mmap):
     _NULL = cutoff_shape + 1
     sentence_batch_len = []
     sentence_batch_len_2 = []
+    y_len_2 = []
 
     #glove_dict, _ = load_glove_vectors(glove_file)
     #train_df = pd.read_csv(train_file, low_memory=False)
@@ -155,6 +157,7 @@ def process_questions(qn_df, glove_dict, mmap):
 
     l = 0
     for index, item in qn_df.iterrows():
+
 
         qn1 = item[1].split('. ') # Extract the sentences
         #print (qn1)
@@ -177,6 +180,8 @@ def process_questions(qn_df, glove_dict, mmap):
 
         # Bit misnomer. qn_ls_word is still array of sentences in each document / answer
         for y in qn_ls_word:
+
+            y_len_2.append(item[2]) # 'elongate' the target variable. This will also need to be re-stitched later on.
 
             tmp = [glove_dict[x] if (x in glove_dict.keys()) else UNK for x in y]
             #word_batch_len = len(tmp)
@@ -231,7 +236,11 @@ def process_questions(qn_df, glove_dict, mmap):
 
     #qn_npy = np.asarray(qn_ls_word_idx)
 
-    return qn_ls_word_embd, qn_batch_len, sentence_batch_len, sentence_batch_len_2 # Flattened qn_lengths, and sentence_len at document level
+    #print ('Shape of word embeddings')
+    #print (qn_ls_word_embd.shape)
+    #print (qn_ls_word_embd[0:1])
+
+    return qn_ls_word_embd, qn_batch_len, sentence_batch_len, sentence_batch_len_2, y_len_2 # Flattened qn_lengths, and sentence_len at document level
 
 
 def build_graph(max_sentence_len):
@@ -253,7 +262,7 @@ def build_graph(max_sentence_len):
 
 
     gru_units = 50
-    output_size = 50
+    output_size =50
 
     gru_units_sent = 50
     output_size_sent = 50
@@ -316,12 +325,14 @@ def build_graph(max_sentence_len):
 
         #tf_padded_final = tf.zeros(shape=[1,max_sent_seq_len,output_size * 2])
         tf_padded_final = tf.zeros(shape=[1,sent_cutoff_seq,output_size * 2])
+        tf_y_final = tf.zeros(shape=[1,1],dtype=tf.int32)
 
         #tf_padded_final = tf.zeros(shape=[1,1,output_size * 2])
         sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
         sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
 
         sentence_batch_length_2 = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len_2")
+        ylen_2 = tf.placeholder(shape=[None],dtype=tf.int32,name="ylen_2")
 
         i = tf.constant(1)
 
@@ -329,19 +340,22 @@ def build_graph(max_sentence_len):
         # Used tensorflow conditionals for the first time!!
 
         # going to try reshape  on individal sentence sizes
-        def while_cond (i, tf_padded_final):
+        def while_cond (i, tf_padded_final, tf_y_final):
             #mb = tf.constant(max_sent_seq_len)
             mb = tf.constant(sent_cutoff_seq)
             return tf.less_equal(i,mb)
 
-        def body(i,tf_padded_final):
+        def body(i,tf_padded_final,tf_y_final):
 
             tf_mask = tf.equal(sentence_batch_length_2,i)
             tf_slice = tf.boolean_mask(outputs,tf_mask,axis=0)
+            tf_y_slice = tf.boolean_mask(ylen_2,tf_mask,axis=0) # reshaping the y to fit the data
 
             tf_slice_reshape = tf.reshape(tf_slice,shape=[-1,i,tf_slice.get_shape().as_list()[1]])
-            #pad_len = max_sent_seq_len - i
+            tf_y_slice_reshape = tf.reshape(tf_y_slice,shape=[-1,i])
+            tf_y_slice_max = tf.reduce_max(tf_y_slice_reshape,axis=1,keep_dims=True) # the elements should be the same across the col
 
+            #pad_len = max_sent_seq_len - i
             pad_len = sent_cutoff_seq - i
 
             tf_slice_padding = [[0,0], [0, pad_len], [0, 0]]
@@ -350,10 +364,11 @@ def build_graph(max_sentence_len):
             #tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
 
             tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded],axis=0)
+            tf_y_final = tf.concat([tf_y_final,tf_y_slice_max],axis=0)
 
             i = tf.add(i,1)
 
-            return i, tf_padded_final
+            return i, tf_padded_final, tf_y_final
 
 
 
@@ -384,11 +399,12 @@ def build_graph(max_sentence_len):
             
         '''
 
-        _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,sent_cutoff_seq,output_size_sent * 2])])
+        _, tf_padded_final_2, tf_y_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final, tf_y_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,sent_cutoff_seq,output_size_sent * 2]),tf.TensorShape([None,1])])
 
 
     # Give it a haircut
     tf_padded_final_2 = tf_padded_final_2[1:,:]
+    tf_y_final_2 = tf_y_final_2[1:,:]
 
     with tf.variable_scope('layer_sentence_hidden_states'):
 
@@ -434,29 +450,25 @@ def build_graph(max_sentence_len):
         logits = tf.add(tf.matmul(outputs_sent,wt),bias)
         logits = tf.squeeze(logits)
         probs = tf.sigmoid(logits)
+        tf_y_final_2 = tf.squeeze(tf_y_final_2)
+        tf_y_final_2 = tf.to_float(tf_y_final_2)
 
     #return embedding_init, embedding_placeholder, \
     #       inputs, inputs_embed, batch_sequence_lengths,\
     #       vector_attn, attn_softmax, \
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
-    return probs, logits, inputs,batch_sequence_lengths, sentence_batch_len, \
-            sentence_index_offsets,  sentence_batch_length_2,outputs_hidden_sent
 
-
-def build_loss_optimizer(logits):
-
-    # Create the back propagation and training evaluation machinery in the graph.
-    with tf.name_scope('cross_entropy'):
+    with tf.variable_scope('cross_entropy'):
 
         global_step = tf.Variable(0,trainable=False,dtype=tf.int32,name='global_step')
 
         # Define loss and optimizer
-        ground_truth_input = tf.placeholder(
-            tf.float32, [None], name='groundtruth_input')
+        #ground_truth_input = tf.placeholder(
+        #    tf.float32, [None], name='groundtruth_input')
 
         cross_entropy_mean = tf.nn.sigmoid_cross_entropy_with_logits(
-            labels=ground_truth_input, logits=logits)
+            labels=tf_y_final_2, logits=logits)
         learning_rate_input = tf.placeholder(
             tf.float32, [], name='learning_rate_input')
 
@@ -464,8 +476,8 @@ def build_loss_optimizer(logits):
 
         #extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)  # For batch normalization ops update
         #with tf.control_dependencies(extra_update_ops):
-        #train_step = tf.train.AdamOptimizer(
-        #    learning_rate_input).minimize(loss,global_step=global_step)
+        train_step = tf.train.AdamOptimizer(
+            learning_rate_input).minimize(loss,global_step=global_step)
 
         #train_step = tf.train.GradientDescentOptimizer(
         #    learning_rate_input).minimize(loss)
@@ -473,15 +485,26 @@ def build_loss_optimizer(logits):
         #train_step = tf.train.AdagradOptimizer(
         #    learning_rate_input).minimize(loss)
 
-        train_step = tf.train.MomentumOptimizer(
-            learning_rate_input,momentum=0.9).minimize(loss,global_step=global_step)
+        #train_step = tf.train.MomentumOptimizer(
+        #    learning_rate_input,momentum=0.9).minimize(loss,global_step=global_step)
 
         #predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
         predicted_indices = tf.to_int32(tf.greater_equal(logits,0.5))
         confusion_matrix = tf.confusion_matrix(
-            ground_truth_input, predicted_indices, num_classes=2, name="confusion_matrix")
+            tf_y_final_2, predicted_indices, num_classes=2, name="confusion_matrix")
 
-    return ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss, global_step
+
+    return probs, logits, inputs,batch_sequence_lengths, sentence_batch_len, \
+            sentence_index_offsets,  sentence_batch_length_2, tf_y_final_2, ylen_2, \
+            learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, \
+            loss, global_step
+
+
+def build_loss_optimizer(logits):
+
+    # Create the back propagation and training evaluation machinery in the graph.
+
+    return
 
 
 
@@ -517,11 +540,13 @@ def build_session(train_file, glove_file,mmap_loc):
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits,  inputs, batch_sequence_lengths, sentence_batch_len,\
-         sentence_index_offsets, sentence_batch_length_2,outputs_hidden_sent = \
+        sentence_index_offsets, sentence_batch_length_2, tf_y_final_2, ylen_2, \
+        learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, \
+        loss, global_step = \
             build_graph(cutoff_seq)
 
-        ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss, global_step \
-            = build_loss_optimizer(logits=logits)
+        #ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss, global_step \
+        #    = build_loss_optimizer(logits=logits)
 
     X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc)
 
@@ -549,13 +574,19 @@ def build_session(train_file, glove_file,mmap_loc):
 
             # Sample mini batch of documents
 
-            X_train_0_sample = X_train.loc[X_train['target'] == 0].sample(n=120)
+            #if (i > 40):
+            #    learning_rate = learning_rate / 10
+
+            X_train_0_sample = X_train.loc[X_train['target'] == 0].sample(n=128)
             X_train_1_sample = X_train.loc[X_train['target'] == 1].sample(n=8)
 
             train_sample = pd.concat([X_train_0_sample,X_train_1_sample],axis=0)
+            train_sample = shuffle(train_sample)
             #train_sample = X_train
-            qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2 = process_questions(train_sample,glove_dict,mmap)
+            qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2, y_len_2 = process_questions(train_sample,glove_dict,mmap)
             y_train = np.asarray(train_sample.loc[:,'target'])
+
+            ylen2_npy = np.asarray(y_len_2)
 
 
             # Create a matrix with each row as sentence offsets
@@ -567,18 +598,18 @@ def build_session(train_file, glove_file,mmap_loc):
 
 
 
-            prob, _, train_confusion_matrix, train_loss, out = \
-                sess.run([final_probs,train_step,confusion_matrix, loss,outputs_hidden_sent], feed_dict = {
+            prob, _, train_confusion_matrix, train_loss, y_2 = \
+                sess.run([final_probs,train_step,confusion_matrix, loss, tf_y_final_2], feed_dict = {
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
                     sentence_batch_len : sentence_len,
                     sentence_index_offsets : np_offsets_len,
                     learning_rate_input : learning_rate,
-                    ground_truth_input : y_train,
-                    sentence_batch_length_2 : sentence_batch_train_2
+                    #ground_truth_input : y_train,
+                    sentence_batch_length_2 : sentence_batch_train_2,
+                    ylen_2 : ylen2_npy
             })
 
-            print (out.shape)
             #print ('Pad2')
             #print (padd_2.shape)
             #print (padd_2[0])
@@ -640,7 +671,9 @@ def build_session(train_file, glove_file,mmap_loc):
 
                 y_valid = X_dev.loc[:, 'target']
 
-                qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2 = process_questions(X_dev, glove_dict,mmap)
+                qn_npy_valid, qn_batch_len_valid, sentence_len_valid, sentence_batch_valid_2, y_len_valid_2 = process_questions(X_dev, glove_dict,mmap)
+
+                ylen2_valid_npy = np.asarray(y_len_valid_2)
 
                 sentence_offsets = np.cumsum(sentence_len_valid)
                 sentence_offsets_2 = np.insert(sentence_offsets, 0, 0, axis=0)
@@ -654,8 +687,9 @@ def build_session(train_file, glove_file,mmap_loc):
                         batch_sequence_lengths: qn_batch_len_valid,
                         sentence_batch_len: sentence_len_valid,
                         sentence_index_offsets: np_offsets_len,
-                        ground_truth_input: y_valid,
-                        sentence_batch_length_2 : sentence_batch_valid_2
+                        #ground_truth_input: y_valid,
+                        sentence_batch_length_2 : sentence_batch_valid_2,
+                        ylen_2 : ylen2_valid_npy
                     })
 
                 if valid_conf_matrix is None:
