@@ -15,8 +15,9 @@ import tensorflow as tf
 cutoff_shape = 2196017
 glove_dim = 300
 max_seq_len = 122
-cutoff_seq = 70
+cutoff_seq = 50
 max_sent_seq_len = 12 # 12 sentences in a doc
+sent_cutoff_seq = 5
 
 reload_mmap = False
 
@@ -116,14 +117,14 @@ def get_train_df_glove_dict(train_file, glove_file,mmap_loc):
     X_train_0 = X_train.loc[X_train['target'] == 0]
     X_train_1 = X_train.loc[X_train['target'] == 1]
 
-    X_train_0_sample = X_train_0.sample(n=500)
-    X_train_1_sample = X_train_1.sample(n=50)
+    X_train_0_sample = X_train_0.sample(n=50000)
+    X_train_1_sample = X_train_1.sample(n=500)
 
     X_dev_0 = X_dev.loc[X_dev['target'] == 0]
     X_dev_1 = X_dev.loc[X_dev['target'] == 1]
 
-    X_dev_0_sample = X_dev_0.sample(n=100)
-    X_dev_1_sample = X_dev_1.sample(n=20)
+    X_dev_0_sample = X_dev_0.sample(n=10000)
+    X_dev_1_sample = X_dev_1.sample(n=200)
 
     X_train_f = pd.concat([X_train_0_sample,X_train_1_sample],axis=0)
     X_dev_f = pd.concat([X_dev_0_sample, X_dev_1_sample], axis=0)
@@ -155,9 +156,6 @@ def process_questions(qn_df, glove_dict, mmap):
     l = 0
     for index, item in qn_df.iterrows():
 
-        #if (index > 1000): # dev purposes only
-        #    break
-
         qn1 = item[1].split('. ') # Extract the sentences
         #print (qn1)
         qn2 = [x.split('? ') for x in qn1]
@@ -167,15 +165,17 @@ def process_questions(qn_df, glove_dict, mmap):
         qn_ls = [re.sub('[^A-Za-z0-9 ]+', '', q) for q in qn3]
         qn_ls = [x.lower() for x in qn_ls if x not in stop_words]
 
-        sentence_batch_len.append(len(qn_ls))
+        # Cutoff
+        if (len(qn_ls) > sent_cutoff_seq):
+            qn_ls = qn_ls[:sent_cutoff_seq]
 
+        sentence_batch_len.append(len(qn_ls))
 
         # word level tokens
         qn_ls_word = [x.split(' ') for x in qn_ls]
         #print (qn_ls_word)
 
         # Bit misnomer. qn_ls_word is still array of sentences in each document / answer
-
         for y in qn_ls_word:
 
             tmp = [glove_dict[x] if (x in glove_dict.keys()) else UNK for x in y]
@@ -191,8 +191,11 @@ def process_questions(qn_df, glove_dict, mmap):
             qn_ls_word_idx.append(tmp)
 
 
+            if (len(tmp) > cutoff_seq):
+                qn_batch_len.append(cutoff_seq)
+            else:
+                qn_batch_len.append(len(tmp))
 
-            qn_batch_len.append(len(tmp))
             sentence_batch_len_2.append(len(qn_ls))
 
     # Now we have max_len, a flattened sentence matrix, and batch sequence length for dynamic rnn.
@@ -210,6 +213,7 @@ def process_questions(qn_df, glove_dict, mmap):
 
         # Word embedding lookup from memmapped file
         tmp_npy = mmap[[item]]
+        #print (tmp_npy)
 
         tmp_npy = np.expand_dims(tmp_npy,axis=0)
 
@@ -226,7 +230,6 @@ def process_questions(qn_df, glove_dict, mmap):
     #print (max_l)
 
     #qn_npy = np.asarray(qn_ls_word_idx)
-
 
     return qn_ls_word_embd, qn_batch_len, sentence_batch_len, sentence_batch_len_2 # Flattened qn_lengths, and sentence_len at document level
 
@@ -249,11 +252,11 @@ def build_graph(max_sentence_len):
         return res_T
 
 
-    gru_units = 100
-    output_size = 100
+    gru_units = 50
+    output_size = 50
 
-    gru_units_sent = 100
-    output_size_sent = 100
+    gru_units_sent = 50
+    output_size_sent = 50
 
     cell_fw = tf.nn.rnn_cell.LSTMCell(gru_units)
     cell_bw = tf.nn.rnn_cell.LSTMCell(gru_units)
@@ -311,7 +314,9 @@ def build_graph(max_sentence_len):
 
     with tf.variable_scope('layer_gather'):
 
-        tf_padded_final = tf.zeros(shape=[1,max_sent_seq_len,output_size * 2])
+        #tf_padded_final = tf.zeros(shape=[1,max_sent_seq_len,output_size * 2])
+        tf_padded_final = tf.zeros(shape=[1,sent_cutoff_seq,output_size * 2])
+
         #tf_padded_final = tf.zeros(shape=[1,1,output_size * 2])
         sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
         sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
@@ -325,7 +330,8 @@ def build_graph(max_sentence_len):
 
         # going to try reshape  on individal sentence sizes
         def while_cond (i, tf_padded_final):
-            mb = tf.constant(max_sent_seq_len)
+            #mb = tf.constant(max_sent_seq_len)
+            mb = tf.constant(sent_cutoff_seq)
             return tf.less_equal(i,mb)
 
         def body(i,tf_padded_final):
@@ -334,8 +340,9 @@ def build_graph(max_sentence_len):
             tf_slice = tf.boolean_mask(outputs,tf_mask,axis=0)
 
             tf_slice_reshape = tf.reshape(tf_slice,shape=[-1,i,tf_slice.get_shape().as_list()[1]])
-            pad_len = max_sent_seq_len - i
+            #pad_len = max_sent_seq_len - i
 
+            pad_len = sent_cutoff_seq - i
 
             tf_slice_padding = [[0,0], [0, pad_len], [0, 0]]
             tf_slice_padded = tf.pad(tf_slice_reshape, tf_slice_padding, 'CONSTANT')
@@ -377,7 +384,7 @@ def build_graph(max_sentence_len):
             
         '''
 
-        _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,12,output_size_sent * 2])])
+        _, tf_padded_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,sent_cutoff_seq,output_size_sent * 2])])
 
 
     # Give it a haircut
@@ -434,13 +441,16 @@ def build_graph(max_sentence_len):
     #       weighted_projection, tf_padded_final, outputs_sent, outputs_hidden_sent
 
     return probs, logits, inputs,batch_sequence_lengths, sentence_batch_len, \
-            sentence_index_offsets,  sentence_batch_length_2
+            sentence_index_offsets,  sentence_batch_length_2,outputs_hidden_sent
 
 
 def build_loss_optimizer(logits):
 
     # Create the back propagation and training evaluation machinery in the graph.
     with tf.name_scope('cross_entropy'):
+
+        global_step = tf.Variable(0,trainable=False,dtype=tf.int32,name='global_step')
+
         # Define loss and optimizer
         ground_truth_input = tf.placeholder(
             tf.float32, [None], name='groundtruth_input')
@@ -454,8 +464,8 @@ def build_loss_optimizer(logits):
 
         #extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)  # For batch normalization ops update
         #with tf.control_dependencies(extra_update_ops):
-        train_step = tf.train.AdamOptimizer(
-            learning_rate_input).minimize(loss)
+        #train_step = tf.train.AdamOptimizer(
+        #    learning_rate_input).minimize(loss,global_step=global_step)
 
         #train_step = tf.train.GradientDescentOptimizer(
         #    learning_rate_input).minimize(loss)
@@ -463,12 +473,15 @@ def build_loss_optimizer(logits):
         #train_step = tf.train.AdagradOptimizer(
         #    learning_rate_input).minimize(loss)
 
+        train_step = tf.train.MomentumOptimizer(
+            learning_rate_input,momentum=0.9).minimize(loss,global_step=global_step)
+
         #predicted_indices = tf.argmax(logits, 1, name="predicted_indices")
         predicted_indices = tf.to_int32(tf.greater_equal(logits,0.5))
         confusion_matrix = tf.confusion_matrix(
             ground_truth_input, predicted_indices, num_classes=2, name="confusion_matrix")
 
-    return ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss
+    return ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss, global_step
 
 
 
@@ -476,7 +489,7 @@ def build_session(train_file, glove_file,mmap_loc):
 
     num_epochs = 200000
     mini_batch_size = 128
-    learning_rate = 0.01
+    learning_rate = 0.001
 
     #validation_batch_size = 1000
 
@@ -490,6 +503,7 @@ def build_session(train_file, glove_file,mmap_loc):
     #chkpoint_dir = '/home/ubuntu/Desktop/kaggle/kaggle_projects/quora_insincere_qns/tensorboard/checkpoint/'
     chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
 
+
     if (os.path.exists(train_tensorboard_dir)):
         shutil.rmtree(train_tensorboard_dir)
     os.mkdir(train_tensorboard_dir)
@@ -499,19 +513,17 @@ def build_session(train_file, glove_file,mmap_loc):
     os.mkdir(valid_tensorboard_dir)
 
 
+
     # Build the graph and the optimizer and loss
     with tf.Graph().as_default() as gr:
         final_probs, logits,  inputs, batch_sequence_lengths, sentence_batch_len,\
-         sentence_index_offsets, sentence_batch_length_2 = \
+         sentence_index_offsets, sentence_batch_length_2,outputs_hidden_sent = \
             build_graph(cutoff_seq)
 
-        ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss \
+        ground_truth_input, learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, loss, global_step \
             = build_loss_optimizer(logits=logits)
 
     X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc)
-
-    print ('X_ men shape')
-    print (X_train.shape)
 
     valid_set_shape = X_dev.shape[0]
     # Open the read mmap
@@ -522,6 +534,12 @@ def build_session(train_file, glove_file,mmap_loc):
         sess.run(tf.global_variables_initializer())
         saver = tf.train.Saver()
 
+        # restore model and continue
+        ckpt = tf.train.get_checkpoint_state(chkpoint_dir)
+        if ckpt and ckpt.model_checkpoint_path:
+                saver.restore(sess, ckpt.model_checkpoint_path)
+
+
         train_writer = tf.summary.FileWriter(train_tensorboard_dir, sess.graph)
         valid_writer = tf.summary.FileWriter(valid_tensorboard_dir)
 
@@ -530,8 +548,12 @@ def build_session(train_file, glove_file,mmap_loc):
         for i in range(0,num_epochs):
 
             # Sample mini batch of documents
-            #train_sample = X_train.sample(n = mini_batch_size)
-            train_sample = X_train
+
+            X_train_0_sample = X_train.loc[X_train['target'] == 0].sample(n=120)
+            X_train_1_sample = X_train.loc[X_train['target'] == 1].sample(n=8)
+
+            train_sample = pd.concat([X_train_0_sample,X_train_1_sample],axis=0)
+            #train_sample = X_train
             qn_npy, qn_batch_len,  sentence_len, sentence_batch_train_2 = process_questions(train_sample,glove_dict,mmap)
             y_train = np.asarray(train_sample.loc[:,'target'])
 
@@ -545,8 +567,8 @@ def build_session(train_file, glove_file,mmap_loc):
 
 
 
-            prob, _, train_confusion_matrix, train_loss = \
-                sess.run([final_probs,train_step,confusion_matrix, loss], feed_dict = {
+            prob, _, train_confusion_matrix, train_loss, out = \
+                sess.run([final_probs,train_step,confusion_matrix, loss,outputs_hidden_sent], feed_dict = {
                     inputs : qn_npy,
                     batch_sequence_lengths : qn_batch_len,
                     sentence_batch_len : sentence_len,
@@ -556,6 +578,7 @@ def build_session(train_file, glove_file,mmap_loc):
                     sentence_batch_length_2 : sentence_batch_train_2
             })
 
+            print (out.shape)
             #print ('Pad2')
             #print (padd_2.shape)
             #print (padd_2[0])
@@ -598,7 +621,8 @@ def build_session(train_file, glove_file,mmap_loc):
 
                 print('Saving checkpoint for epoch:' + str(i))
                 saver.save(sess=sess, save_path=chkpoint_dir + 'quora_insincere_qns.ckpt',
-                           global_step=i)
+                           global_step=global_step)
+
 
             # Validation machinery
             if (i % 20 == 0):
@@ -648,7 +672,7 @@ def build_session(train_file, glove_file,mmap_loc):
 
                 true_pos = np.sum(np.diag(valid_conf_matrix))
                 all_pos = np.sum(valid_conf_matrix)
-                print('Training Accuracy is: ' + str(float(true_pos / all_pos)))
+                print('Valid Accuracy is: ' + str(float(true_pos / all_pos)))
                 print('Total data points:' + str(all_pos))
 
                 valid_auc = roc_auc_score(y_valid, valid_prob,average="weighted")
