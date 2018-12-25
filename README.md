@@ -8,3 +8,5 @@ The Tensorflow implementation for the Hierarchical Attention Network was used in
 The highest F1 score achieved in the competition was 0.635. For comparison, the highest score in the competition currently is 0.711.
 
 To find out more about this project, please visit my blog: https://medium.com/@nitin.vwaran
+
+More details around follow-ups and how to setup on your machine are TBD
