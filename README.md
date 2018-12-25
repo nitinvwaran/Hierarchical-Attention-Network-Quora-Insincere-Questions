@@ -1,7 +1,8 @@
 # kaggle_projects
 Repository for Kaggle Projects and Competitions
 
-1. An Implementation of 'Hierarchical Attention Networks for Document Classification' by Yang et al. (2016)
+
+**1. An Implementation of 'Hierarchical Attention Networks for Document Classification' by Yang et al. (2016)**
 
 This project aims to implement the above paper, in Tensorflow. Following which, improvements to the project in terms of adding more features, will be investigated.
 The Tensorflow implementation for the Hierarchical Attention Network was used in the Kaggle competition 'Quora Insincere Questions Classification'.
