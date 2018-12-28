@@ -2,7 +2,7 @@
 Repository for Kaggle Projects and Competitions
 
 
-**1. Submitted for Quora Insincere Questions Classification Competition: 
+**1. Submitted for Quora Insincere Questions Classification Competition: <br />
 An Implementation of 'Hierarchical Attention Networks for Document Classification' by Yang et al. (2016)**
 
 The Tensorflow implementation for the Hierarchical Attention Network was used in the Kaggle competition 'Quora Insincere Questions Classification':https://www.kaggle.com/c/quora-insincere-questions-classification/data <br /> <br />
