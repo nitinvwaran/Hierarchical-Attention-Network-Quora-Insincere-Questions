@@ -2,7 +2,8 @@
 Repository for Kaggle Projects and Competitions
 
 
-**1. Submitted for Quora Insicere Questions Classification Competition: An Implementation of 'Hierarchical Attention Networks for Document Classification' by Yang et al. (2016)**
+**1. Submitted for Quora Insincere Questions Classification Competition: 
+An Implementation of 'Hierarchical Attention Networks for Document Classification' by Yang et al. (2016)**
 
 The Tensorflow implementation for the Hierarchical Attention Network was used in the Kaggle competition 'Quora Insincere Questions Classification':https://www.kaggle.com/c/quora-insincere-questions-classification/data <br /> <br />
 The highest F1 score achieved in the competition currently by this model is 0.652 (ongoing effort!). 
