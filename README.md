@@ -10,8 +10,7 @@ The highest F1 score achieved in the competition currently by this model is 0.65
 <br /> <br /> 
 For comparison, the highest score in the competition currently is 0.711.
 <br /> <br />
-
-The F1 score progression on a holdout dataset below. Note that the dataset is highly imbalaneced (6% positive class only) <br/>
+The F1 score progression on a holdout dataset below. Note that the dataset is highly imbalanced (6% positive class only) <br/>
 ![alt text](https://github.com/nitinvwaran/kaggle_projects/blob/master/f1_score_valid.PNG) <br /> <br />
 
 The tensorboard graph is as below: <br/>
