@@ -12,13 +12,21 @@ import tensorflow as tf
 
 
 # Some global variables
+# used constants
 cutoff_shape = 2196017          # number of tokens in glove word embeddings file
 glove_dim = 300                 # number of glove dimensions
 max_seq_len = 122               # determined as the maximum # of words in a sentence. This is unused parameter.
+
+# hyperparameter
 cutoff_seq = 40                 # Cutoff the number of words in a sentence. Any sentences with fewer words are padded.
+
+#unused constant
 max_sent_seq_len = 12           # determined as maximum of 12 sentences in a doc across train and test data. Unused parameter
+
+# hyperparameter
 sent_cutoff_seq = 3             # cutoff the number of sentences in a document. Any documents with fewer sentences are padded.
 
+# hyperparameter
 pos_wt = 0.25                   # weights for the loss function.
 
 
@@ -72,7 +80,7 @@ def load_glove_vectors(memmap_loc, glove_file, reload_mmap = False):
     return glove_dict
 
 
-def get_train_df_glove_dict(train_file, glove_file,mmap_loc, is_training = True, reload_mmap=False):
+def get_train_df_glove_dict(train_file, glove_file,mmap_loc, valid_data_file_dump, is_training = True, reload_mmap=False):
 
     """
 
@@ -113,9 +121,9 @@ def get_train_df_glove_dict(train_file, glove_file,mmap_loc, is_training = True,
         X_train_f = shuffle(X_train_f)
         X_dev_f = pd.concat([X_dev_0_sample, X_dev_1_sample], axis=0)
 
-        # Dump the validation data out
+        # Dump the validation data out here
         #valid_dump = '/home/nitin/Desktop/kaggle_data/all/valid_dump.csv'
-        #X_dev.to_csv(valid_dump,index=False)
+        X_dev.to_csv(valid_data_file_dump,index=False)
 
         return X_train_f, X_dev_f, glove_dict
 
@@ -128,6 +136,12 @@ def get_train_df_glove_dict(train_file, glove_file,mmap_loc, is_training = True,
 def process_questions(qn_df, glove_dict, mmap, is_training = True):
 
     """
+
+    Process each document, unrolling the sentences in each document into a flat matrix
+    before looking up the word embeddings data for each word in each sentence.
+    Returns among other things (see below), a 3-D word embedding tensor ready to be fed to the 'input' placeholder.
+
+    Add other pre-processing steps here (e.g spelling corrections..)
 
     :param qn_df: Dataframe of raw document data - for the competition's sake, question data
     :param glove_dict: dictionary of embeddings with key = token and value = index in embedding file
@@ -155,6 +169,8 @@ def process_questions(qn_df, glove_dict, mmap, is_training = True):
     l = 0
 
     '''
+    # Stopwords can be removed from data if desired.
+    
     stop_words = ['how', 'were', 'through', 'up', 'ma', 'because', 'his', "hasn't", 'myself', 'that', 'then', 'm', 'haven', 'during',
      'being', 'needn', 'whom', 'did', 'the', 'very', 'd', 'as', 'their', 'ours', 'was', 'be', 'themselves', "mustn't",
      'she', 'or', 'but', 'yourself', 'if', 'had', 'not', 'itself', 'than', 'such', 'having', 'we', 'again', 'about',
@@ -285,6 +301,7 @@ def build_graph(max_sentence_len):
 
         return res_T
 
+    # hyperparameters
     gru_units = 50         # Feature maps for the GRU / LSTM units at word and sentence levels
     output_size = 50       # Size of the word attention context vector
 
@@ -312,6 +329,8 @@ def build_graph(max_sentence_len):
     with tf.variable_scope('layer_conv_1D'):
 
         # Does feature selection using n-grams + CNN for each sentence in a document.
+
+        # hyperparameters
         feature_map_size = 100
         kernel_1 = 3
         kernel_2 = 4
@@ -553,7 +572,7 @@ def build_graph(max_sentence_len):
         output_conv_sent = tf.nn.dropout(output_conv_sent_1,keep_prob=keep_2)
         '''
 
-        output_conv_sent = tf.reduce_max(tf_padded_final_2_conv,axis=1,keepdims=True)
+        output_conv_sent = tf.reduce_max(tf_padded_final_2_conv,axis=1,keepdims=True) # suppose reduce by sum?
         output_conv_sent = tf.squeeze(output_conv_sent)
 
 
@@ -602,7 +621,7 @@ def build_graph(max_sentence_len):
         final_output = tf.concat([output_conv_sent, outputs_sent], axis=1, name="final_concat")
         final_output.set_shape(shape = [None,feature_map_size * 3 + output_size_sent * 2])
 
-        fc1_size = 256
+        fc1_size = 256 # hyperparameter
         fc1 = tf.contrib.layers.fully_connected(final_output, fc1_size,
                                                              activation_fn=tf.nn.relu)
         fc1_drop = tf.nn.dropout(fc1,keep_fc)
@@ -656,7 +675,7 @@ def build_graph(max_sentence_len):
         #train_step = tf.train.MomentumOptimizer(
         #    learning_rate_input,momentum=0.9).minimize(loss,global_step=global_step)
 
-        predicted_indices = tf.to_int32(tf.greater_equal(logits,0.7))
+        predicted_indices = tf.to_int32(tf.greater_equal(logits,0.7)) # hyperparameter
         confusion_matrix = tf.confusion_matrix(
             tf_y_final_2, predicted_indices, num_classes=2, name="confusion_matrix")
 
@@ -676,8 +695,18 @@ def build_loss_optimizer(logits):
 
 def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard_dir,valid_tensorboard_dir):
 
-    reload_mmap = True # during training
+    """
 
+    :param train_file: train data file
+    :param glove_file: file with the glove embeddings
+    :param mmap_loc: memory map location on disk to be written to during training
+    :param chkpoint_dir: checkpoint directory
+    :param train_tensorboard_dir: directory where training events are written to tensorboard file
+    :param valid_tensorboard_dir: directory where events on validation data are written to tensorboard file
+    :return: Nothing
+    """
+
+    # hyperparameters
     num_epochs = 200000
     mini_batch_size = 64
     learning_rate = 0.001
@@ -702,7 +731,7 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
         loss, global_step, predicted_indices, keep_fc = \
             build_graph(cutoff_seq)
 
-    X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc,reload_mmap)
+    X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc,reload_mmap = True)
 
     valid_set_shape = X_dev.shape[0]
     # Open the read mmap
@@ -727,10 +756,10 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
         for i in range(0,num_epochs):
 
             if (i == 2000):
-                learning_rate /= 10
+                learning_rate /= 10 # Step by step learning rate
 
             X_train_0_sample = X_train.loc[X_train['target'] == 0].sample(n=mini_batch_size)
-            X_train_1_sample = X_train.loc[X_train['target'] == 1].sample(n=round(mini_batch_size * 1.0))
+            X_train_1_sample = X_train.loc[X_train['target'] == 1].sample(n=round(mini_batch_size * 1.0)) # hyperparameter Downsample or upsample
 
             train_sample = pd.concat([X_train_0_sample,X_train_1_sample],axis=0)
             train_sample = shuffle(train_sample)
@@ -754,7 +783,7 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
                     learning_rate_input : learning_rate,
                     sentence_batch_length_2 : sentence_batch_train_2,
                     ylen_2 : ylen2_npy,
-                    keep_fc : 0.5
+                    keep_fc : 0.5 # Keep probability
             })
 
             print ('Epoch is:' + str(i))
@@ -875,6 +904,18 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
 
 def inference(test_file, glove_file, mmap_loc, chkpoint_dir, out_file):
 
+    """
+
+    Does inference on a test data set
+
+    :param test_file: test data file
+    :param glove_file: file with glove embeddings
+    :param mmap_loc: memory map location on disk
+    :param chkpoint_dir: where the checkpoint is stored (directory)
+    :param out_file: a file with the predictions to be stored on
+    :return: Nothing
+    """
+
     reload_mmap = False # Inference
 
     test_df = pd.read_csv(test_file,low_memory=False)
@@ -978,6 +1019,17 @@ def inference(test_file, glove_file, mmap_loc, chkpoint_dir, out_file):
 
 def check_validation_labels(valid_file, glove_file, mmap_loc, chkpoint_dir, out_file):
 
+    """
+    This is a copy of the inference function, but on a dev dataset. Useful to see the results, what the model is doing.
+
+    :param valid_file: sample dev data file
+    :param glove_file: glove embeddings
+    :param mmap_loc: memory map location on disk
+    :param chkpoint_dir: checkpoint directory
+    :param out_file: file to which predictions are written.
+    :return: None
+    """
+
     reload_mmap = False  # Inference
 
     batch_final = np.zeros((1, 2))
@@ -1005,8 +1057,6 @@ def check_validation_labels(valid_file, glove_file, mmap_loc, chkpoint_dir, out_
     mmap = np.memmap(mmap_loc, dtype='float32', mode='r', shape=(cutoff_shape + 2, glove_dim))
 
     test_len = test_df.shape[0]
-    # print ('The shape of test data')
-    # print (str(test_len))
 
     i = 0
     test_batch = 10000
@@ -1080,6 +1130,14 @@ def check_validation_labels(valid_file, glove_file, mmap_loc, chkpoint_dir, out_
 
 
 def main():
+
+    """
+    Change parameters here e.g file locations
+    TODO: config for hyperparameters through command line
+    To search for hyperparameters in this file, I have commented wih 'hyperparameter'. Search for this string.
+
+    :return: Nothing
+    """
 
     chkpoint_dir = '/home/nitin/Desktop/kaggle_data/all/tensorboard/checkpoint/'
     #chkpoint_dir = '/kaggle/working/checkpoint/'
