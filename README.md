@@ -25,7 +25,7 @@ Features from both components are concatenated, and passed through a dense layer
 The graph as described above is visualized below on tensorboard <br />
 ![alt text](https://github.com/nitinvwaran/kaggle_projects/blob/master/tensorboard_graph.PNG) <br /> <br />
 
-The data required to run this on your machine has also been added to this github project. These are: <br />
+The data required to run this on your machine can be downloaded from the kaggle link above. These are: <br />
 1) train.csv (the training data) <br />
 2) test.csv (the test data) <br />
 3) glove.840B.300D.txt (glove embeddings file) <br />
