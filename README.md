@@ -10,7 +10,7 @@ The F1 score progression on a holdout dataset below: <br/>
 The tensorboard graph is as below: <br/>
 There are two components to the graph: <br/>
 1) The Hierarchical Attention Network component, implemented as proposed by Yang et al. (2016). <br/>
-2) To extract more features, a 'hierarchical CNN' component was used, which first extracts n-grams of window sized 3,4,5 from each sentence in a  document, and does a global maxpooling over time for each window extraction, before concatenating the features. This approach is similar to the approach followed in 'Sentence Classification using CNN' by Yoon Kim (2014). <br/>
+2) To extract more features, a 'hierarchical CNN' component was used, which first extracts n-grams of window sized 3,4,5 from each sentence in a  document, and does a global maxpooling over time for each window extraction, before concatenating the features. This approach is similar to the approach followed in 'Convolutional Neural Networks for Sentence Classification' by Yoon Kim (2014). <br/>
 Following this extraction, the concatenated features which are at sentence level, are rolled up into their document, and a reduction by max is applied across all the sentences in the document, essentially preserving all the features extracte earlier, but only for the most prominent sentence. <br /> <br/>
 
 Features from both components are concatenated, and passed through a dense layer before a logistic classifier <br/> <br/>
