@@ -80,7 +80,7 @@ def load_glove_vectors(memmap_loc, glove_file, reload_mmap = False):
     return glove_dict
 
 
-def get_train_df_glove_dict(train_file, glove_file,mmap_loc, valid_data_file_dump, is_training = True, reload_mmap=False):
+def get_train_df_glove_dict(train_file, glove_file,mmap_loc, is_training = True, reload_mmap=False):
 
     """
 
@@ -122,8 +122,8 @@ def get_train_df_glove_dict(train_file, glove_file,mmap_loc, valid_data_file_dum
         X_dev_f = pd.concat([X_dev_0_sample, X_dev_1_sample], axis=0)
 
         # Dump the validation data out here
-        #valid_dump = '/home/nitin/Desktop/kaggle_data/all/valid_dump.csv'
-        X_dev.to_csv(valid_data_file_dump,index=False)
+        valid_dump = '/home/nitin/Desktop/kaggle_data/all/valid_dump.csv'
+        X_dev.to_csv(valid_dump,index=False)
 
         return X_train_f, X_dev_f, glove_dict
 
@@ -285,6 +285,7 @@ def build_graph(max_sentence_len):
     """
 
     keep_fc = tf.placeholder(dtype=tf.float32, name="keep_1")
+    keep_conv = tf.placeholder(dtype=tf.float32,name='keep_conv')
 
     def sparse_softmax(T):
 
@@ -370,7 +371,7 @@ def build_graph(max_sentence_len):
 
         output_features_conv.set_shape(shape=[None,feature_map_size * 3])
 
-        #output_features_conv = tf.nn.dropout(output_features_conv_1,keep_prob=keep_1)
+        output_features_conv = tf.nn.dropout(output_features_conv,keep_prob=keep_conv)
 
 
     '''
@@ -625,18 +626,20 @@ def build_graph(max_sentence_len):
         fc1 = tf.contrib.layers.fully_connected(final_output, fc1_size,
                                                              activation_fn=tf.nn.relu)
         fc1_drop = tf.nn.dropout(fc1,keep_fc)
-        #fc2_size = 64
-        #fc2 = tf.contrib.layers.fully_connected(fc1, fc2_size,
-                                                #activation_fn=tf.nn.relu)
+
+        # more features !
+
+        fc2_size = 256  # hyperparameter
+        fc2 = tf.contrib.layers.fully_connected(fc1_drop, fc2_size,
+                                                activation_fn=tf.nn.relu)
+        fc2_drop = tf.nn.dropout(fc2, keep_fc)
 
 
     with tf.variable_scope('layer_classification'):
 
-
-
         wt_init = tf.contrib.layers.xavier_initializer()
         #wt = tf.get_variable(name="wt",shape=[output_size * 2 +  feature_map_size * 3 ,1],initializer=wt_init)
-        wt = tf.get_variable(name="wt",shape=[fc1_size ,1],initializer=wt_init)
+        wt = tf.get_variable(name="wt",shape=[fc2_size ,1],initializer=wt_init)
         #wt = tf.get_variable(name="wt",shape=[output_size * 2,1],initializer=wt_init)
         bias = tf.get_variable(name="bias",shape=[1],initializer=tf.zeros_initializer())
 
@@ -644,7 +647,7 @@ def build_graph(max_sentence_len):
         #logits = tf.layers.dense(final_output,units = 1 , activation=tf.nn.sigmoid,use_bias=True,kernel_initializer = wt_init)
         #logits = tf.add(tf.matmul(outputs_sent,wt),bias)
 
-        logits = tf.add(tf.matmul(fc1_drop,wt),bias)
+        logits = tf.add(tf.matmul(fc2_drop,wt),bias)
         logits = tf.squeeze(logits)
         #logits = tf.squeeze(outputs_sent_2)
         probs = tf.sigmoid(logits)
@@ -683,7 +686,7 @@ def build_graph(max_sentence_len):
     return probs, logits, inputs,batch_sequence_lengths, sentence_batch_len, \
             sentence_index_offsets,  sentence_batch_length_2, tf_y_final_2, ylen_2, \
             learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, \
-            loss, global_step, predicted_indices, keep_fc
+            loss, global_step, predicted_indices, keep_fc, keep_conv
 
 
 
@@ -728,7 +731,7 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
         final_probs, logits,  inputs, batch_sequence_lengths, sentence_batch_len,\
         sentence_index_offsets, sentence_batch_length_2, tf_y_final_2, ylen_2, \
         learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, \
-        loss, global_step, predicted_indices, keep_fc = \
+        loss, global_step, predicted_indices, keep_fc, keep_conv = \
             build_graph(cutoff_seq)
 
     X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc,reload_mmap = True)
@@ -783,7 +786,8 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
                     learning_rate_input : learning_rate,
                     sentence_batch_length_2 : sentence_batch_train_2,
                     ylen_2 : ylen2_npy,
-                    keep_fc : 0.5 # Keep probability
+                    keep_fc : 0.5, # Keep probability,
+                    keep_conv : 0.5
             })
 
             print ('Epoch is:' + str(i))
@@ -857,7 +861,8 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
                         sentence_index_offsets: np_offsets_len,
                         sentence_batch_length_2 : sentence_batch_valid_2,
                         ylen_2 : ylen2_valid_npy,
-                        keep_fc : 1.0
+                        keep_fc : 1.0,
+                        keep_conv : 1.0
                     })
 
                 if valid_conf_matrix is None:
@@ -934,7 +939,7 @@ def inference(test_file, glove_file, mmap_loc, chkpoint_dir, out_file):
         final_probs, logits,  inputs, batch_sequence_lengths, sentence_batch_len,\
         sentence_index_offsets, sentence_batch_length_2, tf_y_final_2, ylen_2, \
         learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, \
-        loss, global_step, predicted_indices, keep_fc = \
+        loss, global_step, predicted_indices, keep_fc, keep_conv = \
             build_graph(cutoff_seq)
 
     _, _, glove_dict = get_train_df_glove_dict(test_file, glove_file, mmap_loc,is_training=False,reload_mmap=reload_mmap)
@@ -985,7 +990,8 @@ def inference(test_file, glove_file, mmap_loc, chkpoint_dir, out_file):
                     sentence_index_offsets: np_offsets_len,
                     sentence_batch_length_2: sentence_batch_train_2,
                     ylen_2: ylen2_npy,
-                    keep_fc: 1.0
+                    keep_fc: 1.0,
+                    keep_conv : 1.0
                 })
 
             y_2 = np.expand_dims(y_2,axis=1)
@@ -1048,7 +1054,7 @@ def check_validation_labels(valid_file, glove_file, mmap_loc, chkpoint_dir, out_
         final_probs, logits, inputs, batch_sequence_lengths, sentence_batch_len, \
         sentence_index_offsets, sentence_batch_length_2, tf_y_final_2, ylen_2, \
         learning_rate_input, train_step, confusion_matrix, cross_entropy_mean, \
-        loss, global_step, predicted_indices, keep_fc = \
+        loss, global_step, predicted_indices, keep_fc, keep_conv = \
             build_graph(cutoff_seq)
 
     _, _, glove_dict = get_train_df_glove_dict(None, glove_file, mmap_loc, is_training=False,
@@ -1102,7 +1108,8 @@ def check_validation_labels(valid_file, glove_file, mmap_loc, chkpoint_dir, out_
                     sentence_index_offsets: np_offsets_len,
                     sentence_batch_length_2: sentence_batch_train_2,
                     ylen_2: ylen2_npy,
-                    keep_fc: 1.0
+                    keep_fc: 1.0,
+                    keep_conv : 1.0
                 })
 
             y_2 = np.expand_dims(y_2, axis=1)
