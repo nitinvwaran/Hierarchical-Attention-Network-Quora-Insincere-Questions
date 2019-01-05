@@ -68,7 +68,8 @@ def load_glove_vectors(memmap_loc, glove_file, reload_mmap = False):
     if (reload_mmap):
 
         # Add the UNK - in case token cant be found in glove file.
-        unk_wt = np.random.randn(glove_dim)
+        #unk_wt = np.random.randn(glove_dim)
+        unk_wt = np.zeros(glove_dim)
         mmap[i:] = unk_wt
         i += 1
 
@@ -734,7 +735,7 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
         loss, global_step, predicted_indices, keep_fc, keep_conv = \
             build_graph(cutoff_seq)
 
-    X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc,reload_mmap = True)
+    X_train, X_dev, glove_dict = get_train_df_glove_dict(train_file, glove_file,mmap_loc,reload_mmap = False)
 
     valid_set_shape = X_dev.shape[0]
     # Open the read mmap
@@ -758,8 +759,8 @@ def build_session(train_file, glove_file,mmap_loc,chkpoint_dir,train_tensorboard
 
         for i in range(0,num_epochs):
 
-            if (i == 2000):
-                learning_rate /= 10 # Step by step learning rate
+            #if (i == 2000):
+            #    learning_rate /= 10 # Step by step learning rate
 
             X_train_0_sample = X_train.loc[X_train['target'] == 0].sample(n=mini_batch_size)
             X_train_1_sample = X_train.loc[X_train['target'] == 1].sample(n=round(mini_batch_size * 1.0)) # hyperparameter Downsample or upsample
