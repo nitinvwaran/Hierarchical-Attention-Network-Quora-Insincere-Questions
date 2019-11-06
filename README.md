@@ -1,6 +1,4 @@
-# kaggle_projects
-Repository for Kaggle Projects and Competitions
-
+# Hierarchical Attention Network for Quora Insincere Questions Classification
 
 **1. Submitted for Quora Insincere Questions Classification Competition: <br />
 An Implementation of 'Hierarchical Attention Networks for Document Classification' by Yang et al. (2016)**
