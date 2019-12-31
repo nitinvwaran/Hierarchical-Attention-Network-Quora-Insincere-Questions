@@ -458,18 +458,13 @@ def build_graph(max_sentence_len):
 
         tf_padded_final = tf.zeros(shape=[1,sent_cutoff_seq,output_size * 2])
         tf_y_final = tf.zeros(shape=[1,1],dtype=tf.int32)
-
         sentence_batch_len = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len")
         sentence_index_offsets = tf.placeholder(shape=[None,2],dtype=tf.int32,name="sentence_index_offsets")
-
         #sentence_batch_length_2 = tf.placeholder(shape=[None],dtype=tf.int32,name="sentence_batch_len_2")
         ylen_2 = tf.placeholder(shape=[None],dtype=tf.int32,name="ylen_2")
 
         i = tf.constant(1)
-
-        # A proud moment =)
-        # Used tensorflow conditionals for the first time!!
-
+        
         def while_cond (i, tf_padded_final, tf_y_final):
 
             mb = tf.constant(sent_cutoff_seq)
@@ -484,44 +479,14 @@ def build_graph(max_sentence_len):
             tf_slice_reshape = tf.reshape(tf_slice,shape=[-1,i,tf_slice.get_shape().as_list()[1]])
             tf_y_slice_reshape = tf.reshape(tf_y_slice,shape=[-1,i])
             tf_y_slice_max = tf.reduce_max(tf_y_slice_reshape,axis=1,keep_dims=True) # the elements should be the same across the col
-
             pad_len = sent_cutoff_seq - i
-
             tf_slice_padding = [[0,0], [0, pad_len], [0, 0]]
             tf_slice_padded = tf.pad(tf_slice_reshape, tf_slice_padding, 'CONSTANT')
-
             tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded],axis=0)
             tf_y_final = tf.concat([tf_y_final,tf_y_slice_max],axis=0)
-
             i = tf.add(i,1)
 
             return i, tf_padded_final, tf_y_final
-
-        '''
-        # This is the old way
-        def while_cond (i, tf_padded_final):
-            mb = tf.constant(max_sent_seq_len)
-            return tf.less(i,mb)
-
-        def body(i,tf_padded_final):
-
-            #tf.print(i,[i])
-            end_idx = sentence_index_offsets[i,1]
-            st_idx = sentence_index_offsets[i,0]
-            tf_range = tf.range(start=st_idx,limit=end_idx)
-            pad_len = max_sent_seq_len - sentence_batch_len[i]
-
-            tf_slice = tf.gather(outputs,tf_range)
-            tf_slice_padding = [[0, pad_len], [0, 0]]
-            tf_slice_padded = tf.pad(tf_slice, tf_slice_padding, 'CONSTANT')
-            tf_slice_padded_3D = tf.expand_dims(tf_slice_padded, axis=0)
-
-            tf_padded_final = tf.concat([tf_padded_final,tf_slice_padded_3D],axis=0)
-
-            i = tf.add(i,1)
-
-            return i, tf_padded_final
-        '''
 
         _, tf_padded_final_2, tf_y_final_2 = tf.while_loop(while_cond, body, [i, tf_padded_final, tf_y_final],shape_invariants=[i.get_shape(),tf.TensorShape([None,sent_cutoff_seq,output_size_sent * 2]),tf.TensorShape([None,1])])
 
